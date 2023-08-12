@@ -1,0 +1,55 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: aws-pod-eip-controller-role
+rules:
+- resources: ["pods"]
+  apiGroups: [""]
+  verbs: ["get", "watch", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: aws-pod-eip-controller-rolebinding
+subjects:
+- kind: ServiceAccount
+  name: aws-pod-eip-controller
+  namespace: kube-system
+roleRef:
+  kind: ClusterRole
+  name: aws-pod-eip-controller-role
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  namespace: kube-system
+  name: aws-pod-eip-controller
+  labels:
+    app.kubernetes.io/name: aws-pod-eip-controller
+    version: v1
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: aws-pod-eip-controller
+  strategy:
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: aws-pod-eip-controller
+    spec:
+      containers:
+      - image: <account>.dkr.ecr.<region-code>.amazonaws.com/aws-pod-eip-controller
+        imagePullPolicy: Always
+        name: aws-pod-eip-controller
+        env:
+        - name: LOG_LEVEL
+          value: warn
+      serviceAccountName: aws-pod-eip-controller
+  
