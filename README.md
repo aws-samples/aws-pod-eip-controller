@@ -1,4 +1,4 @@
-# AWS POD EIP Controller
+# AWS Pod EIP Controller
 
 The AWS Pod EIP Controller (PEC) offers a function to automatically allocate and release Elastic IPs via annotations. It also enables automatic association of allocated EIPs with the PODs and provides the ability to add EIPs to Shied protection via annotations. This feature enhances security by allowing for better control over IP addresses used in AWS resources.
 
