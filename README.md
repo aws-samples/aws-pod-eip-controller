@@ -96,7 +96,7 @@ eksctl create iamserviceaccount \
     --approve
 ```
 
-## Deploy EPC
+## Deploy PEC
 
 Replace the image address in template.yaml with the address of the ECR image
 
