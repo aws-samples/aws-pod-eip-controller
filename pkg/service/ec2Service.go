@@ -15,9 +15,10 @@ import (
 )
 
 type EC2Service struct {
-	VPCID     string
-	Region    string
-	EC2Client *ec2.Client
+	VPCID       string
+	Region      string
+	ClusterName string
+	EC2Client   *ec2.Client
 }
 
 func (s *EC2Service) DescribeNetworkInterfaces(ip string) (eni string, err error) {
@@ -73,6 +74,40 @@ func (s *EC2Service) DescribeAddresses(ip string, eni string) (associationID str
 	return
 }
 
+type Address struct {
+	AllocationID     string
+	AssociationID    string
+	PrivateIpAddress string
+}
+
+func (s *EC2Service) DescribeUsedAddresses() (addresses []Address, err error) {
+	result, err := s.EC2Client.DescribeAddresses(context.TODO(), &ec2.DescribeAddressesInput{
+		Filters: []types.Filter{
+			{
+				Name:   aws.String("tag:service.beta.kubernetes.io/aws-pod-eip-controller-type"),
+				Values: []string{"auto"},
+			},
+			{
+				Name:   aws.String("tag:service.beta.kubernetes.io/aws-pod-eip-controller-cluster-name"),
+				Values: []string{s.ClusterName},
+			},
+		},
+	})
+	if err != nil {
+		return
+	}
+	addresses = make([]Address, 0, 10)
+	for _, address := range result.Addresses {
+		addresses = append(addresses, Address{
+			AllocationID:     *(address.AllocationId),
+			AssociationID:    *(address.AssociationId),
+			PrivateIpAddress: *(address.PrivateIpAddress),
+		})
+	}
+	logrus.Infof("used address length: %d", len(addresses))
+	return addresses, nil
+}
+
 func (s *EC2Service) AllocateAddress() (allocationID string, err error) {
 	// aws ec2 allocate-address
 	result, err := s.EC2Client.AllocateAddress(context.TODO(), &ec2.AllocateAddressInput{
@@ -81,8 +116,12 @@ func (s *EC2Service) AllocateAddress() (allocationID string, err error) {
 				ResourceType: types.ResourceTypeElasticIp,
 				Tags: []types.Tag{
 					{
-						Key:   aws.String("service.beta.kubernetes.io/aws-eip-pod-controller-type"),
+						Key:   aws.String("service.beta.kubernetes.io/aws-pod-eip-controller-type"),
 						Value: aws.String("auto"),
+					},
+					{
+						Key:   aws.String("service.beta.kubernetes.io/aws-pod-eip-controller-cluster-name"),
+						Value: aws.String(s.ClusterName),
 					},
 				},
 			},
@@ -134,10 +173,11 @@ func (s *EC2Service) ReleaseAddress(allocationID string) (err error) {
 	return
 }
 
-func NewEC2Service(vpcid string, region string) (service *EC2Service, err error) {
+func NewEC2Service(vpcid string, region string, clusterName string) (service *EC2Service, err error) {
 	service = &EC2Service{
-		VPCID:  vpcid,
-		Region: region,
+		VPCID:       vpcid,
+		Region:      region,
+		ClusterName: clusterName,
 	}
 	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion(service.Region))
 	if err != nil {

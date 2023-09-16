@@ -22,13 +22,9 @@ export AWS_REGION=<region-code>
 ```shell
 aws ecr create-repository --repository-name aws-pod-eip-controller
 
-docker buildx build -t aws-pod-eip-controller . --platform linux/amd64 --build-arg TARGETOS=linux --build-arg TARGETARCH=amd64
-
 aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
 
-docker tag aws-pod-eip-controller:latest ${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/aws-pod-eip-controller
-
-docker push ${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/aws-pod-eip-controller
+docker buildx build -t ${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/aws-pod-eip-controller:latest --platform linux/amd64,linux/arm64 --push .
 ```
 
 ## Configure IAM
@@ -108,18 +104,23 @@ kubectl apply -f template.yaml
 
 Name|Type|Default|Location
 -|-|-|-
-service.beta.kubernetes.io/aws-eip-pod-controller-type|auto|N/A|pod
-service.beta.kubernetes.io/aws-eip-pod-controller-shield|advanced|N/A|pod
+service.beta.kubernetes.io/aws-pod-eip-controller-type|auto|N/A|pod
+service.beta.kubernetes.io/aws-pod-eip-controller-shield|advanced|N/A|pod
 
-## environment variables
+## config.yaml
 
 Name|Type|Default|Describetion
 -|-|-|-
-VPC_ID|string|N/A|need to provide when debugging locally or deploying in fargate
-REGION|string|N/A|need to provide when debugging locally or deploying in fargate
-NAMESPACE|string|''|Which namespace to listen on only, Empty to listen to all
-LOG_LEVEL|string|info|log level: panic fatal error warn info debug trace
-CHANNEL_SIZE|int|20|number of pipelines
+vpcID|string|N/A|need to provide when debugging locally or deploying in fargate
+region|string|N/A|need to provide when debugging locally or deploying in fargate
+watchNamespace|string|''|which namespace to listen on only, Empty to listen to all
+clusterName|string|''|eks cluster name
+channelsize|int|20|number of pipelines
+resyncPeriod|int|60|informer resync period, 0 to disable resync
+log.level|string|info|log level: panic fatal error warn info debug trace
+log.format|string|json|log format: text or json
+recycleOption.enable|bool|false|whether recycle the eips which do not attach any pod
+recycleOption.period|int|3600|period for rcycle the check the eips that do not attach any pod, 0 to check once on start
 
 ## Demo
 
@@ -154,8 +155,8 @@ spec:
       labels:
         app: app-nginx-demo
       annotations:
-        service.beta.kubernetes.io/aws-eip-pod-controller-type: auto
-        service.beta.kubernetes.io/aws-eip-pod-controller-shield: advanced
+        service.beta.kubernetes.io/aws-pod-eip-controller-type: auto
+        service.beta.kubernetes.io/aws-pod-eip-controller-shield: advanced
     spec:
       serviceAccountName: nginx-user
       containers:

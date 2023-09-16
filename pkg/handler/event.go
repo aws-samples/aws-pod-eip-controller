@@ -26,7 +26,7 @@ func (e *event) PodIP2Int() uint32 {
 }
 
 func (e *event) Process(saveEvent *event, ec2Service *service.EC2Service, shieldService *service.ShiedService) error {
-	// EIP attach
+	// EIP process
 	var allocationID, associationID, eni string
 	var isAllocated bool
 	var err error
@@ -62,7 +62,7 @@ func (e *event) Process(saveEvent *event, ec2Service *service.EC2Service, shield
 			}
 		}
 	}
-	// Shied Attach
+	// Shied process
 	if saveEvent == nil || e.ShiedAdv != saveEvent.ShiedAdv {
 		// process shield attach
 		account, isSubscription := shieldService.DescribeSubscription()

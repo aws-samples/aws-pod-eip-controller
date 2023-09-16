@@ -5,56 +5,76 @@ package main
 
 import (
 	"context"
+	"flag"
 	"os"
-	"os/signal"
-	"strconv"
-	"sync"
 	"time"
 
 	"github.com/aws-samples/aws-pod-eip-controller/pkg/handler"
+	"github.com/aws-samples/aws-pod-eip-controller/pkg/informer"
+	"github.com/aws-samples/aws-pod-eip-controller/pkg/recycle"
+	"github.com/aws-samples/aws-pod-eip-controller/pkg/service"
+	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
 	log "github.com/sirupsen/logrus"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
+	"gopkg.in/yaml.v2"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/dynamic"
-	"k8s.io/client-go/dynamic/dynamicinformer"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/tools/leaderelection"
+	"k8s.io/client-go/tools/leaderelection/resourcelock"
 )
 
+type Config struct {
+	Log struct {
+		Level  string `yaml:"level"`
+		Format string `yaml:"format"`
+	} `yaml:"log"`
+	ClusterName    string `yaml:"clusterName"`
+	ChannelSize    int    `yaml:"channelSize"`
+	VpcID          string `yaml:"vpcID"`
+	Region         string `yaml:"region"`
+	KubeConfigPath string `yaml:"kubeConfigPath"`
+	WatchNamespace string `yaml:"watchNamespace"`
+	ResyncPeriod   int    `yaml:"resyncPeriod"`
+	RecycleOption  struct {
+		Enable bool `yaml:"enable"`
+		Period int  `yaml:"period"`
+	} `yaml:"recycleOption"`
+}
+
 func main() {
+	// config parse
+	configFileName := flag.String("f", "config.yaml", "config file name")
+	flag.Parse()
+	config := Config{}
+	configYaml, err := os.ReadFile(*configFileName)
+	if err != nil {
+		panic(err)
+	}
+	err = yaml.Unmarshal(configYaml, &config)
+	if err != nil {
+		panic(err)
+	}
 	// logrus setting
-	logLevel := os.Getenv("LOG_LEVEL")
-	level, err := log.ParseLevel(logLevel)
+	level, err := log.ParseLevel(config.Log.Level)
 	if err != nil {
 		level = log.InfoLevel
 	}
-	log.SetFormatter(&log.JSONFormatter{})
 	log.SetLevel(level)
+	if config.Log.Format == "json" {
+		logrus.SetFormatter(&logrus.JSONFormatter{})
+	} else {
+		logrus.SetFormatter(&logrus.TextFormatter{})
+	}
 	log.SetOutput(os.Stdout)
+	logrus.Debugf("%+v", config)
 
-	// init handler
-	channelSize := os.Getenv("CHANNEL_SIZE")
-	vpcID := os.Getenv("VPC_ID")
-	region := os.Getenv("REGION")
-	if channelSize == "" {
-		channelSize = "20"
-	}
-	size, err := strconv.Atoi(channelSize)
-	if err != nil {
-		log.Fatalln(err)
-	}
-	handler, err := handler.NewHandler(int32(size), vpcID, region)
-	if err != nil {
-		log.Fatalln(err)
-	}
-
-	// kube config
-	kubeConfig := os.Getenv("KUBECONFIG")
+	// create cluster client
 	var clusterConfig *rest.Config
-	if kubeConfig != "" {
-		clusterConfig, err = clientcmd.BuildConfigFromFlags("", kubeConfig)
+	if config.KubeConfigPath != "" {
+		clusterConfig, err = clientcmd.BuildConfigFromFlags("", config.KubeConfigPath)
 	} else {
 		clusterConfig, err = rest.InClusterConfig()
 	}
@@ -65,76 +85,63 @@ func main() {
 	if err != nil {
 		log.Fatalln(err)
 	}
-	resource := schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"}
-	NameSpace := os.Getenv("NAMESPACE")
-	factory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(clusterClient, 60*time.Second, NameSpace, nil)
-	informer := factory.ForResource(resource).Informer()
 
-	mux := &sync.RWMutex{}
-	synced := false
+	// acquired lease lock
+	client := kubernetes.NewForConfigOrDie(clusterConfig)
+	lock := &resourcelock.LeaseLock{
+		LeaseMeta: metav1.ObjectMeta{
+			Name:      "aws-pod-eip-controller-lock",
+			Namespace: "kube-system",
+		},
+		Client: client.CoordinationV1(),
+		LockConfig: resourcelock.ResourceLockConfig{
+			Identity: uuid.New().String(),
+		},
+	}
 
-	informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc: func(obj interface{}) {
-			logrus.WithFields(logrus.Fields{
-				"action": "add-pod",
-				"obj":    obj,
-			}).Debug()
-			// Handler logic: add event dismiss
-		},
-		UpdateFunc: func(oldObj, newObj interface{}) {
-			mux.RLock()
-			defer mux.RUnlock()
-			if !synced {
-				return
-			}
-			logrus.WithFields(logrus.Fields{
-				"action":  "update-pod",
-				"old-obj": oldObj,
-				"new-obj": newObj,
-			}).Debug()
-			// Handler logic
-			err := handler.HandleEvent(newObj.(*unstructured.Unstructured), oldObj.(*unstructured.Unstructured), "update")
-			if err != nil {
-				log.WithFields(logrus.Fields{
-					"action": "delete-pod",
-					"obj":    newObj,
-				}).Warn(err)
-			}
-		},
-		DeleteFunc: func(obj interface{}) {
-			mux.RLock()
-			defer mux.RUnlock()
-			if !synced {
-				return
-			}
-			logrus.WithFields(logrus.Fields{
-				"action": "delete-pod",
-				"obj":    obj,
-			}).Debug()
-			// Handler logic
-			handler.HandleEvent(obj.(*unstructured.Unstructured), nil, "delete")
-			if err != nil {
-				log.WithFields(logrus.Fields{
-					"action": "delete-pod",
-					"obj":    obj,
-				}).Warn(err)
-			}
+	leaderelection.RunOrDie(context.TODO(), leaderelection.LeaderElectionConfig{
+		Lock:            lock,
+		ReleaseOnCancel: true,
+		LeaseDuration:   30 * time.Second,
+		RenewDeadline:   10 * time.Second,
+		RetryPeriod:     5 * time.Second,
+		Callbacks: leaderelection.LeaderCallbacks{
+			OnStartedLeading: func(ctx context.Context) {
+				log.Infof("start leading")
+				// init handler
+				if config.ChannelSize <= 0 || config.ChannelSize > 100 {
+					config.ChannelSize = 20
+				}
+				vpcID, region, err := service.GetVpcIDAndRegion(config.VpcID, config.Region)
+				if err != nil {
+					log.Fatalln("get vpc-id and region fail", err)
+				}
+				handler, err := handler.NewHandler(int32(config.ChannelSize), vpcID, region, config.ClusterName)
+				if err != nil {
+					log.Fatalln(err)
+				}
+
+				// create informer
+				pecInformer := informer.NewPECInformer(clusterClient, config.ResyncPeriod, config.WatchNamespace, handler)
+				go pecInformer.Run(ctx.Done())
+
+				// recycle elatic ip
+				if config.RecycleOption.Enable {
+					recycle, err := recycle.NewRecycle(clusterClient, config.ClusterName, config.RecycleOption.Period, vpcID, region)
+					if err != nil {
+						log.Fatalln(err)
+					}
+					go recycle.Run()
+				}
+			},
+			OnStoppedLeading: func() {
+				log.Infof("stop leading")
+				os.Exit(0)
+			},
+			OnNewLeader: func(identity string) {
+				log.Infof("new leader: %s", identity)
+			},
 		},
 	})
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer cancel()
-
-	go informer.Run(ctx.Done())
-
-	isSynced := cache.WaitForCacheSync(ctx.Done(), informer.HasSynced)
-	mux.Lock()
-	synced = isSynced
-	mux.Unlock()
-
-	if !isSynced {
-		log.Fatal("failed to sync")
-	}
-
-	<-ctx.Done()
 }

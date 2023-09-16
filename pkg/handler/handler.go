@@ -4,14 +4,8 @@
 package handler
 
 import (
-	"io"
-	"net/http"
-	"strings"
-	"time"
-
 	"github.com/aws-samples/aws-pod-eip-controller/pkg/service"
 	"github.com/sirupsen/logrus"
-	"github.com/tidwall/gjson"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -73,7 +67,7 @@ func (h *Handler) HandleEvent(obj *unstructured.Unstructured, oldObj *unstructur
 	if err != nil {
 		return
 	}
-	if exist && phase != "Running" {
+	if exist && phase != "Running" { //TODO add more phase
 		logrus.Info("phase: ", phase)
 		return
 	}
@@ -101,22 +95,35 @@ func (h *Handler) HandleEvent(obj *unstructured.Unstructured, oldObj *unstructur
 		ShiedAdv:        false,
 	}
 	switch action {
-	case "update":
+	case "add":
 		annotations := obj.GetAnnotations()
-		oldAnnotations := oldObj.GetAnnotations()
-		if val, ok := annotations["service.beta.kubernetes.io/aws-eip-pod-controller-type"]; ok && val == "auto" {
+		if val, ok := annotations["service.beta.kubernetes.io/aws-pod-eip-controller-type"]; ok && val == "auto" {
 			event.AttachIP = true
-			if val, ok := annotations["service.beta.kubernetes.io/aws-eip-pod-controller-shield"]; ok && val == "advanced" {
+			if val, ok := annotations["service.beta.kubernetes.io/aws-pod-eip-controller-shield"]; ok && val == "advanced" {
 				event.ShiedAdv = true
 			}
 		} else {
-			if val, ok := oldAnnotations["service.beta.kubernetes.io/aws-eip-pod-controller-type"]; ok && val == "auto" {
+			logrus.WithFields(logrus.Fields{
+				"obj": obj,
+			}).Info("ignore add event with no annotation")
+			return
+		}
+	case "update":
+		annotations := obj.GetAnnotations()
+		oldAnnotations := oldObj.GetAnnotations()
+		if val, ok := annotations["service.beta.kubernetes.io/aws-pod-eip-controller-type"]; ok && val == "auto" {
+			event.AttachIP = true
+			if val, ok := annotations["service.beta.kubernetes.io/aws-pod-eip-controller-shield"]; ok && val == "advanced" {
+				event.ShiedAdv = true
+			}
+		} else {
+			if val, ok := oldAnnotations["service.beta.kubernetes.io/aws-pod-eip-controller-type"]; ok && val == "auto" {
 				event.AttachIP = false
 			} else {
 				logrus.WithFields(logrus.Fields{
 					"newobj": obj,
 					"oldobj": oldObj,
-				}).Info("ignore update event")
+				}).Info("ignore update event with no annotation")
 				return
 			}
 		}
@@ -128,14 +135,8 @@ func (h *Handler) HandleEvent(obj *unstructured.Unstructured, oldObj *unstructur
 	return
 }
 
-func NewHandler(channelSize int32, vpcid string, region string) (handler *Handler, err error) {
-	if len(vpcid) == 0 || len(region) == 0 {
-		vpcid, region, err = getInfo()
-		if err != nil {
-			return nil, err
-		}
-	}
-	ec2Service, err := service.NewEC2Service(vpcid, region)
+func NewHandler(channelSize int32, vpcid string, region string, clusterName string) (handler *Handler, err error) {
+	ec2Service, err := service.NewEC2Service(vpcid, region, clusterName)
 	if err != nil {
 		return nil, err
 	}
@@ -150,55 +151,4 @@ func NewHandler(channelSize int32, vpcid string, region string) (handler *Handle
 	}
 	handler.init()
 	return handler, nil
-}
-
-func getInfo() (vpcid string, region string, err error) {
-	// get vpcid from instance meta url
-	url := "http://instance-data/latest/meta-data/network/interfaces/macs/"
-	client := &http.Client{
-		Timeout: time.Second * 5,
-	}
-	res, err := client.Get(url)
-	if err != nil {
-		return
-	}
-	macs, err := io.ReadAll(res.Body)
-	if err != nil {
-		return
-	}
-	mac := strings.Split(string(macs), "\n")[0]
-	url = url + string(mac) + "/vpc-id"
-	client.Get(url)
-	if err != nil {
-		return
-	}
-	res, err = client.Get(url)
-	if err != nil {
-		return
-	}
-	vpcID, err := io.ReadAll(res.Body)
-	if err != nil {
-		return
-	}
-	vpcid = string(vpcID)
-	// get region from instance meta url
-	url = "http://instance-data/latest/dynamic/instance-identity/document"
-	client = &http.Client{
-		Timeout: time.Second * 5,
-	}
-	res, err = client.Get(url)
-	if err != nil {
-		return
-	}
-	document, err := io.ReadAll(res.Body)
-	if err != nil {
-		return
-	}
-	region = gjson.Get(string(document), "region").String()
-
-	logrus.WithFields(logrus.Fields{
-		"vpcid":  vpcid,
-		"region": region,
-	}).Info("get info from imds")
-	return
 }
