@@ -64,11 +64,7 @@ func (h *Handler) insert2Queue(event event) {
 
 func (h *Handler) HandleEvent(obj *unstructured.Unstructured, oldObj *unstructured.Unstructured, action string) (err error) {
 	phase, exist, err := unstructured.NestedString(obj.Object, "status", "phase")
-	if err != nil {
-		return
-	}
-	if exist && phase != "Running" { //TODO add more phase
-		logrus.Info("phase: ", phase)
+	if err != nil || !exist {
 		return
 	}
 	podIP, exist, err := unstructured.NestedString(obj.Object, "status", "podIP")

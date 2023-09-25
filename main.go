@@ -15,7 +15,6 @@ import (
 	"github.com/aws-samples/aws-pod-eip-controller/pkg/service"
 	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
-	log "github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v2"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/dynamic"
@@ -57,18 +56,25 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	// logrus setting
-	level, err := log.ParseLevel(config.Log.Level)
-	if err != nil {
-		level = log.InfoLevel
+	if config.ChannelSize <= 0 || config.ChannelSize > 100 {
+		config.ChannelSize = 20
 	}
-	log.SetLevel(level)
+	vpcID, region, err := service.GetVpcIDAndRegion(config.VpcID, config.Region)
+	if err != nil {
+		logrus.Fatalln("get vpc-id and region fail", err)
+	}
+	// logrus setting
+	level, err := logrus.ParseLevel(config.Log.Level)
+	if err != nil {
+		level = logrus.InfoLevel
+	}
+	logrus.SetLevel(level)
 	if config.Log.Format == "json" {
 		logrus.SetFormatter(&logrus.JSONFormatter{})
 	} else {
 		logrus.SetFormatter(&logrus.TextFormatter{})
 	}
-	log.SetOutput(os.Stdout)
+	logrus.SetOutput(os.Stdout)
 	logrus.Debugf("%+v", config)
 
 	// create cluster client
@@ -79,11 +85,11 @@ func main() {
 		clusterConfig, err = rest.InClusterConfig()
 	}
 	if err != nil {
-		log.Fatalln(err)
+		logrus.Fatalln(err)
 	}
 	clusterClient, err := dynamic.NewForConfig(clusterConfig)
 	if err != nil {
-		log.Fatalln(err)
+		logrus.Fatalln(err)
 	}
 
 	// acquired lease lock
@@ -107,18 +113,11 @@ func main() {
 		RetryPeriod:     5 * time.Second,
 		Callbacks: leaderelection.LeaderCallbacks{
 			OnStartedLeading: func(ctx context.Context) {
-				log.Infof("start leading")
+				logrus.Infof("start leading")
 				// init handler
-				if config.ChannelSize <= 0 || config.ChannelSize > 100 {
-					config.ChannelSize = 20
-				}
-				vpcID, region, err := service.GetVpcIDAndRegion(config.VpcID, config.Region)
-				if err != nil {
-					log.Fatalln("get vpc-id and region fail", err)
-				}
 				handler, err := handler.NewHandler(int32(config.ChannelSize), vpcID, region, config.ClusterName)
 				if err != nil {
-					log.Fatalln(err)
+					logrus.Fatalln(err)
 				}
 
 				// create informer
@@ -129,17 +128,17 @@ func main() {
 				if config.RecycleOption.Enable {
 					recycle, err := recycle.NewRecycle(clusterClient, config.ClusterName, config.RecycleOption.Period, vpcID, region)
 					if err != nil {
-						log.Fatalln(err)
+						logrus.Fatalln(err)
 					}
 					go recycle.Run()
 				}
 			},
 			OnStoppedLeading: func() {
-				log.Infof("stop leading")
+				logrus.Infof("stop leading")
 				os.Exit(0)
 			},
 			OnNewLeader: func(identity string) {
-				log.Infof("new leader: %s", identity)
+				logrus.Infof("new leader: %s", identity)
 			},
 		},
 	})
