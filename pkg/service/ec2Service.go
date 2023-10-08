@@ -68,8 +68,8 @@ func (s *EC2Service) DescribeAddresses(ip string, eni string) (associationID str
 		return
 	}
 	isAllocated = true
-	associationID = *(result.Addresses[0].AssociationId)
-	allocationID = *(result.Addresses[0].AllocationId)
+	associationID = getString(result.Addresses[0].AssociationId)
+	allocationID = getString(result.Addresses[0].AllocationId)
 	logrus.Infof("describe address associationID: %s", associationID)
 	return
 }
@@ -84,11 +84,11 @@ func (s *EC2Service) DescribeUsedAddresses() (addresses []Address, err error) {
 	result, err := s.EC2Client.DescribeAddresses(context.TODO(), &ec2.DescribeAddressesInput{
 		Filters: []types.Filter{
 			{
-				Name:   aws.String("tag:service.beta.kubernetes.io/aws-pod-eip-controller-type"),
+				Name:   aws.String("tag:aws-samples.github.com/aws-pod-eip-controller-type"),
 				Values: []string{"auto"},
 			},
 			{
-				Name:   aws.String("tag:service.beta.kubernetes.io/aws-pod-eip-controller-cluster-name"),
+				Name:   aws.String("tag:aws-samples.github.com/aws-pod-eip-controller-cluster-name"),
 				Values: []string{s.ClusterName},
 			},
 		},
@@ -99,9 +99,9 @@ func (s *EC2Service) DescribeUsedAddresses() (addresses []Address, err error) {
 	addresses = make([]Address, 0, 10)
 	for _, address := range result.Addresses {
 		addresses = append(addresses, Address{
-			AllocationID:     *(address.AllocationId),
-			AssociationID:    *(address.AssociationId),
-			PrivateIpAddress: *(address.PrivateIpAddress),
+			AllocationID:     getString(address.AllocationId),
+			AssociationID:    getString(address.AssociationId),
+			PrivateIpAddress: getString(address.PrivateIpAddress),
 		})
 	}
 	logrus.Infof("used address length: %d", len(addresses))
@@ -116,11 +116,11 @@ func (s *EC2Service) AllocateAddress() (allocationID string, err error) {
 				ResourceType: types.ResourceTypeElasticIp,
 				Tags: []types.Tag{
 					{
-						Key:   aws.String("service.beta.kubernetes.io/aws-pod-eip-controller-type"),
+						Key:   aws.String("aws-samples.github.com/aws-pod-eip-controller-type"),
 						Value: aws.String("auto"),
 					},
 					{
-						Key:   aws.String("service.beta.kubernetes.io/aws-pod-eip-controller-cluster-name"),
+						Key:   aws.String("aws-samples.github.com/aws-pod-eip-controller-cluster-name"),
 						Value: aws.String(s.ClusterName),
 					},
 				},

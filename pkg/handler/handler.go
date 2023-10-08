@@ -54,7 +54,7 @@ func (h *Handler) process(i int) {
 }
 
 func (h *Handler) insert2Queue(event event) {
-	hash := int32(event.PodIP2Int()) % h.ChannelSize
+	hash := event.PodIP2Int() % uint32(h.ChannelSize)
 	h.ProcessChannel[hash] <- event
 	logrus.WithFields(logrus.Fields{
 		"event": event,
@@ -93,9 +93,9 @@ func (h *Handler) HandleEvent(obj *unstructured.Unstructured, oldObj *unstructur
 	switch action {
 	case "add":
 		annotations := obj.GetAnnotations()
-		if val, ok := annotations["service.beta.kubernetes.io/aws-pod-eip-controller-type"]; ok && val == "auto" {
+		if val, ok := annotations["aws-samples.github.com/aws-pod-eip-controller-type"]; ok && val == "auto" {
 			event.AttachIP = true
-			if val, ok := annotations["service.beta.kubernetes.io/aws-pod-eip-controller-shield"]; ok && val == "advanced" {
+			if val, ok := annotations["aws-samples.github.com/aws-pod-eip-controller-shield"]; ok && val == "advanced" {
 				event.ShiedAdv = true
 			}
 		} else {
@@ -107,13 +107,13 @@ func (h *Handler) HandleEvent(obj *unstructured.Unstructured, oldObj *unstructur
 	case "update":
 		annotations := obj.GetAnnotations()
 		oldAnnotations := oldObj.GetAnnotations()
-		if val, ok := annotations["service.beta.kubernetes.io/aws-pod-eip-controller-type"]; ok && val == "auto" {
+		if val, ok := annotations["aws-samples.github.com/aws-pod-eip-controller-type"]; ok && val == "auto" {
 			event.AttachIP = true
-			if val, ok := annotations["service.beta.kubernetes.io/aws-pod-eip-controller-shield"]; ok && val == "advanced" {
+			if val, ok := annotations["aws-samples.github.com/aws-pod-eip-controller-shield"]; ok && val == "advanced" {
 				event.ShiedAdv = true
 			}
 		} else {
-			if val, ok := oldAnnotations["service.beta.kubernetes.io/aws-pod-eip-controller-type"]; ok && val == "auto" {
+			if val, ok := oldAnnotations["aws-samples.github.com/aws-pod-eip-controller-type"]; ok && val == "auto" {
 				event.AttachIP = false
 			} else {
 				logrus.WithFields(logrus.Fields{

@@ -67,12 +67,12 @@ data:
     log:
       level: warn
       format: json
-    clusterName: eks-cluster
+    clusterName: <cluster-name>
     vpcID: 
     region: 
     channelSize: 20
     kubeConfigPath: 
-    watchNamespace: 
+    watchNamespace: <watch-namespace>
     resyncPeriod: 600
     recycleOption:
       enable: false
@@ -87,7 +87,7 @@ metadata:
     app.kubernetes.io/name: aws-pod-eip-controller
     version: v1
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: aws-pod-eip-controller

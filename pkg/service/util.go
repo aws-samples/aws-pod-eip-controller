@@ -63,3 +63,11 @@ func GetVpcIDAndRegion(vpcid string, region string) (vpcidRet string, regionRet 
 	}).Info("get info from imds")
 	return vpcid, region, nil
 }
+
+func getString(stringPoint *string) string {
+	if stringPoint == nil {
+		return ""
+	} else {
+		return *stringPoint
+	}
+}

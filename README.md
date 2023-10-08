@@ -104,8 +104,8 @@ kubectl apply -f template.yaml
 
 Name|Type|Default|Location
 -|-|-|-
-service.beta.kubernetes.io/aws-pod-eip-controller-type|auto|N/A|pod
-service.beta.kubernetes.io/aws-pod-eip-controller-shield|advanced|N/A|pod
+aws-samples.github.com/aws-pod-eip-controller-type|auto|N/A|pod
+aws-samples.github.com/aws-pod-eip-controller-shield|advanced|N/A|pod
 
 ## config.yaml
 
@@ -124,7 +124,13 @@ recycleOption.period|int|3600|period for rcycle the check the eips that do not a
 
 ## Demo
 
-```yaml
+```shell
+cat << EOF > nginx.demo.yaml
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nginx-demo-ns
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -145,18 +151,13 @@ spec:
   selector:
     matchLabels:
       app: app-nginx-demo
-  strategy:
-    rollingUpdate:
-      maxSurge: 25%
-      maxUnavailable: 25%
-    type: RollingUpdate
   template:
     metadata:
       labels:
         app: app-nginx-demo
       annotations:
-        service.beta.kubernetes.io/aws-pod-eip-controller-type: auto
-        service.beta.kubernetes.io/aws-pod-eip-controller-shield: advanced
+        aws-samples.github.com/aws-pod-eip-controller-type: auto
+        aws-samples.github.com/aws-pod-eip-controller-shield: advanced
     spec:
       serviceAccountName: nginx-user
       containers:
@@ -166,20 +167,6 @@ spec:
         ports:
         - containerPort: 80
           protocol: TCP
-        volumeMounts:
-        - mountPath: /etc/nginx/nginx.conf
-          readOnly: true
-          name: nginx-conf
-          subPath: nginx.conf
-      volumes:
-      - name: nginx-conf
-        configMap:
-          name: nginx-conf
-          items:
-            - key: nginx.conf
-              path: nginx.conf
-```
-
-```shell
+EOF
 kubectl apply -f nginx.demo.yaml
 ```

@@ -63,6 +63,10 @@ func (r *Recycle) Run() {
 		}
 		for _, address := range addresses {
 			logrus.Debug("process: ", address)
+			// only process association eip
+			if address.PrivateIpAddress == "" || address.AssociationID == "" {
+				continue
+			}
 			if _, ok := IPList[address.PrivateIpAddress]; ok {
 				continue
 			}
