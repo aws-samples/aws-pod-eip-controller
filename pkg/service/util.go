@@ -1,67 +1,66 @@
 package service
 
 import (
+	"context"
+	"fmt"
 	"io"
-	"net/http"
-	"strings"
-	"time"
 
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/feature/ec2/imds"
 	"github.com/sirupsen/logrus"
-	"github.com/tidwall/gjson"
 )
 
 func GetVpcIDAndRegion(vpcid string, region string) (vpcidRet string, regionRet string, err error) {
 	if len(vpcid) > 0 && len(region) > 0 {
 		return vpcid, region, nil
 	}
-	// get vpcid from instance meta url
-	url := "http://instance-data/latest/meta-data/network/interfaces/macs/"
-	client := &http.Client{
-		Timeout: time.Second * 5,
+	cfg, err := config.LoadDefaultConfig(context.TODO())
+	if err != nil {
+		logrus.Fatal()
+		return
 	}
-	res, err := client.Get(url)
+
+	client := imds.NewFromConfig(cfg)
+	macData, err := client.GetMetadata(context.TODO(), &imds.GetMetadataInput{
+		Path: "mac",
+	})
 	if err != nil {
 		return
 	}
-	macs, err := io.ReadAll(res.Body)
+	macByte, err := io.ReadAll(macData.Content)
 	if err != nil {
 		return
 	}
-	mac := strings.Split(string(macs), "\n")[0]
-	url = url + string(mac) + "/vpc-id"
-	client.Get(url)
+
+	vpcidData, err := client.GetMetadata(context.TODO(), &imds.GetMetadataInput{
+		Path: fmt.Sprintf("network/interfaces/macs/%s/vpc-id", string(macByte)),
+	})
 	if err != nil {
 		return
 	}
-	res, err = client.Get(url)
+	vpcidByte, err := io.ReadAll(vpcidData.Content)
 	if err != nil {
 		return
 	}
-	vpcID, err := io.ReadAll(res.Body)
+	vpcidRet = string(vpcidByte)
+
+	regionData, err := client.GetMetadata(context.TODO(), &imds.GetMetadataInput{
+		Path: "placement/region",
+	})
 	if err != nil {
 		return
 	}
-	vpcid = string(vpcID)
-	// get region from instance meta url
-	url = "http://instance-data/latest/dynamic/instance-identity/document"
-	client = &http.Client{
-		Timeout: time.Second * 5,
-	}
-	res, err = client.Get(url)
+	regionByte, err := io.ReadAll(regionData.Content)
 	if err != nil {
 		return
 	}
-	document, err := io.ReadAll(res.Body)
-	if err != nil {
-		return
-	}
-	region = gjson.Get(string(document), "region").String()
+	regionRet = string(regionByte)
 
 	logrus.WithFields(logrus.Fields{
-		"vpcid":  vpcid,
-		"region": region,
+		"vpcid":  vpcidRet,
+		"region": regionRet,
 	}).Info("get info from imds")
-	return vpcid, region, nil
+	return
 }
 
 func getString(stringPoint *string) string {

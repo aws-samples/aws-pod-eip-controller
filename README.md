@@ -104,8 +104,8 @@ kubectl apply -f template.yaml
 
 Name|Type|Default|Location
 -|-|-|-
-aws-samples.github.com/aws-pod-eip-controller-type|auto|N/A|pod
-aws-samples.github.com/aws-pod-eip-controller-shield|advanced|N/A|pod
+aws-samples.github.com/aws-pod-eip-controller-type|string|auto|pod
+aws-samples.github.com/aws-pod-eip-controller-shield|string|advanced|pod
 
 ## config.yaml
 
