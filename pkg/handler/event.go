@@ -5,14 +5,21 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
+	"fmt"
 	"net"
 
 	"github.com/aws-samples/aws-pod-eip-controller/pkg/service"
 	"github.com/sirupsen/logrus"
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes"
 )
 
 type event struct {
+	Namespace       string
+	PodName         string
 	PodIP           string
 	ResourceVersion string
 	AttachIP        bool
@@ -25,7 +32,7 @@ func (e *event) PodIP2Int() uint32 {
 	return long
 }
 
-func (e *event) Process(saveEvent *event, ec2Service *service.EC2Service, shieldService *service.ShiedService) error {
+func (e *event) Process(saveEvent *event, ec2Service *service.EC2Service, shieldService *service.ShiedService, client *kubernetes.Clientset) error {
 	// EIP process
 	var allocationID, associationID, eni string
 	var isAllocated bool
@@ -42,11 +49,17 @@ func (e *event) Process(saveEvent *event, ec2Service *service.EC2Service, shield
 		}
 		if isAllocated != e.AttachIP {
 			if e.AttachIP {
-				allocationID, err = ec2Service.AllocateAddress()
+				allocationID, publicIP, err := ec2Service.AllocateAddress()
 				if err != nil {
 					return err
 				}
 				err = ec2Service.AssociateAddress(e.PodIP, eni, allocationID)
+				if err != nil {
+					return err
+				}
+				//add label
+				labelPatch := fmt.Sprintf(`[{"op":"add","path":"/metadata/labels/aws-pod-eip-controller-public-ip","value":"%s"}]`, publicIP)
+				_, err = client.CoreV1().Pods(e.Namespace).Patch(context.TODO(), e.PodName, types.JSONPatchType, []byte(labelPatch), v1.PatchOptions{})
 				if err != nil {
 					return err
 				}
@@ -59,6 +72,9 @@ func (e *event) Process(saveEvent *event, ec2Service *service.EC2Service, shield
 				if err != nil {
 					return err
 				}
+				//delete label
+				labelPatch := `[{"op":"remove","path":"/metadata/labels/aws-pod-eip-controller-public-ip","value":None}]`
+				client.CoreV1().Pods(e.Namespace).Patch(context.TODO(), e.PodName, types.JSONPatchType, []byte(labelPatch), v1.PatchOptions{})
 			}
 		}
 	}

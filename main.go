@@ -115,7 +115,7 @@ func main() {
 			OnStartedLeading: func(ctx context.Context) {
 				logrus.Infof("start leading")
 				// init handler
-				handler, err := handler.NewHandler(int32(config.ChannelSize), vpcID, region, config.ClusterName)
+				handler, err := handler.NewHandler(int32(config.ChannelSize), vpcID, region, config.ClusterName, client)
 				if err != nil {
 					logrus.Fatalln(err)
 				}

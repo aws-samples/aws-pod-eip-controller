@@ -108,7 +108,7 @@ func (s *EC2Service) DescribeUsedAddresses() (addresses []Address, err error) {
 	return addresses, nil
 }
 
-func (s *EC2Service) AllocateAddress() (allocationID string, err error) {
+func (s *EC2Service) AllocateAddress() (allocationID string, publicIP string, err error) {
 	// aws ec2 allocate-address
 	result, err := s.EC2Client.AllocateAddress(context.TODO(), &ec2.AllocateAddressInput{
 		TagSpecifications: []types.TagSpecification{
@@ -131,6 +131,7 @@ func (s *EC2Service) AllocateAddress() (allocationID string, err error) {
 		return
 	}
 	allocationID = *(result.AllocationId)
+	publicIP = *(result.PublicIp)
 	logrus.Infof("allocate address allocationID: %s", allocationID)
 	return
 }

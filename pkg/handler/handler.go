@@ -7,12 +7,14 @@ import (
 	"github.com/aws-samples/aws-pod-eip-controller/pkg/service"
 	"github.com/sirupsen/logrus"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/client-go/kubernetes"
 )
 
 type Handler struct {
 	ChannelSize    int32
 	EC2Service     *service.EC2Service
 	ShiedService   *service.ShiedService
+	K8sClient      *kubernetes.Clientset
 	ProcessChannel []chan event
 	EipStatusMap   []map[string]event
 }
@@ -41,13 +43,13 @@ func (h *Handler) process(i int) {
 			continue
 		}
 		if !ok {
-			err := e.Process(nil, h.EC2Service, h.ShiedService)
+			err := e.Process(nil, h.EC2Service, h.ShiedService, h.K8sClient)
 			if err != nil {
 				logrus.Error(err)
 				continue
 			}
 		} else {
-			e.Process(&val, h.EC2Service, h.ShiedService)
+			e.Process(&val, h.EC2Service, h.ShiedService, h.K8sClient)
 		}
 		h.EipStatusMap[i][e.PodIP] = e
 	}
@@ -85,6 +87,8 @@ func (h *Handler) HandleEvent(obj *unstructured.Unstructured, oldObj *unstructur
 		"action":           action,
 	}).Info()
 	event := event{
+		Namespace:       obj.GetNamespace(),
+		PodName:         obj.GetName(),
 		PodIP:           podIP,
 		ResourceVersion: obj.GetResourceVersion(),
 		AttachIP:        false,
@@ -131,7 +135,7 @@ func (h *Handler) HandleEvent(obj *unstructured.Unstructured, oldObj *unstructur
 	return
 }
 
-func NewHandler(channelSize int32, vpcid string, region string, clusterName string) (handler *Handler, err error) {
+func NewHandler(channelSize int32, vpcid string, region string, clusterName string, client *kubernetes.Clientset) (handler *Handler, err error) {
 	ec2Service, err := service.NewEC2Service(vpcid, region, clusterName)
 	if err != nil {
 		return nil, err
@@ -144,6 +148,7 @@ func NewHandler(channelSize int32, vpcid string, region string, clusterName stri
 		ChannelSize:  channelSize,
 		EC2Service:   ec2Service,
 		ShiedService: shieldService,
+		K8sClient:    client,
 	}
 	handler.init()
 	return handler, nil
