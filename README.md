@@ -2,103 +2,15 @@
 
 The AWS Pod EIP Controller (PEC) offers a function to automatically allocate and release Elastic IPs via annotations. It also enables automatic association of allocated EIPs with the PODs and provides the ability to add EIPs to Shied protection via annotations. This feature enhances security by allowing for better control over IP addresses used in AWS resources.
 
-## Prerequisites
+## Overview
 
-* Have an EKS cluster
-* The Pod that wants to add the EIP runs on the nodes in the public subnets
+![Elastic IP controller Overview](/images/Elastic%20IP%20controller%20Overview.png)
 
-## Build and push image to ECR
+The solution processes EIP and Shield for Pods through the following steps:
 
-1. Set the current account and region
-
-```shell
-export ACCOUNT_ID=$(aws sts get-caller-identity --output text --query Account)
-
-export AWS_REGION=<region-code>
-```
-
-2. Build and push EPC images to ECR
-
-```shell
-aws ecr create-repository --repository-name aws-pod-eip-controller
-
-aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
-
-docker buildx build -t ${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/aws-pod-eip-controller:latest --platform linux/amd64,linux/arm64 --push .
-```
-
-## Configure IAM
-
-### IAM roles for service accounts (IRSA)
-
-The reference IAM policies contain the following permissive configuration:
-
-```yaml
-{
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Sid": "VisualEditor0",
-            "Effect": "Allow",
-            "Action": [
-                "ec2:ReleaseAddress",
-                "ec2:DisassociateAddress",
-                "ec2:DescribeAddresses",
-                "shield:CreateProtection",
-                "ec2:DescribeNetworkInterfaces",
-                "shield:DescribeProtection",
-                "shield:DescribeSubscription",
-                "ec2:CreateTags",
-                "shield:DeleteProtection",
-                "ec2:AssociateAddress",
-                "ec2:AllocateAddress"
-            ],
-            "Resource": "*"
-        }
-    ]
-}
-```
-
-2. Create an IAM OIDC provider. You can skip this step if you already have one for your cluster.
-
-```yaml
-eksctl utils associate-iam-oidc-provider \
-    --region <region-code> \
-    --cluster <your-cluster-name> \
-    --approve
-```
-
-3. Save the IAM policy to iam-policy.json
-4. Create an IAM policy named AWSPodEIPControllerIAMPolicy
-
-```yaml
-aws iam create-policy \
-    --policy-name AWSPodEIPControllerIAMPolicy \
-    --policy-document file://iam-policy.json
-```
-
-Take note of the policy ARN that's returned.
-
-5. Create an IAM role and Kubernetes ServiceAccount for the PEC. Use the ARN from the previous step.
-
-```shell
-eksctl create iamserviceaccount \
-    --cluster=<cluster-name> \
-    --namespace=kube-system \
-    --name=aws-pod-eip-controller \
-    --attach-policy-arn=arn:aws:iam::<AWS_ACCOUNT_ID>:policy/AWSPodEIPControllerIAMPolicy \
-    --override-existing-serviceaccounts \
-    --region <region-code> \
-    --approve
-```
-
-## Deploy PEC
-
-Replace the image address in template.yaml with the address of the ECR image
-
-```shell
-kubectl apply -f template.yaml
-```
+1. Informers listen for Pod events through List and Watch, and push them to the DeltaFIFO
+2. DeltaFIFO sends the acquired events to the WorkQueue  
+3. The Processor handles the events; based on the annotation information in the Pod events, it uses the AWS SDK to add/remove EIP and join/leave the Shield resource protection for the Pod
 
 ## Annotations
 
@@ -122,7 +34,141 @@ log.format|string|json|log format: text or json
 recycleOption.enable|bool|false|whether recycle the eips which do not attach any pod
 recycleOption.period|int|3600|period for rcycle the check the eips that do not attach any pod, 0 to check once on start
 
-## Demo
+## Prerequisites
+
+* Install [eksctl](https://docs.aws.amazon.com/eks/latest/userguide/eksctl.html).
+* Install [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html).
+* Install [kubectl](https://kubernetes.io/docs/tasks/tools/).
+* install [git](https://github.com/git-guides/install-git).
+* install [docker](https://docs.docker.com/engine/install/).
+* install [docker buildx](https://docs.docker.com/build/architecture/#install-buildx).
+
+## Walkthrough
+
+### Create an EKS cluster using EC2 instances that are deployed in a public subnet.
+
+Set the current account and region
+
+```shell
+export ACCOUNT_ID=$(aws sts get-caller-identity --output text --query Account)
+export AWS_REGION=<your-region>
+```
+
+**Note**: Replace the region where your EKS cluster is deployed.
+
+This command will concurrently create a node group called main. The node group will have instances of type m5.large and will be deployed in the public subnet.
+
+```shell
+cat << EOF > eip-demo-cluster.yaml
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: eip-controller-demo
+  region: ${AWS_REGION}
+  version: "1.27"
+
+iam:
+  withOIDC: true
+managedNodeGroups:
+  - name: main
+    instanceType: m5.large
+    desiredCapacity: 2
+    privateNetworking: false
+EOF
+eksctl create cluster -f eip-demo-cluster.yaml
+kubectl get nodes
+```
+
+![EKS nodes](images/EKS%20nodes.png)
+
+### Build Pod EIP controller image and push to Amazon Elastic Container Registry
+
+Create ECR repository and login.
+
+```shell
+aws ecr create-repository --repository-name aws-pod-eip-controller
+aws ecr get-login-password --region ${AWS_REGION} \
+    | docker login --username AWS \
+    --password-stdin ${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
+```
+
+Download the sample Pod EIP Controller code, build the image and push it to ECR.
+
+```shell
+git clone https://github.com/aws-samples/aws-pod-eip-controller.git
+cd aws-pod-eip-controller
+docker buildx build \
+    --tag ${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/aws-pod-eip-controller:latest \
+    --platform linux/amd64,linux/arm64 \
+    --push .
+```
+
+### Deploy Pod EIP controller
+
+Create the IAM policy needed for the controller.
+
+```shell
+cat << EOF > iam-policy.json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "VisualEditor0",
+            "Effect": "Allow",
+            "Action": [
+                "ec2:ReleaseAddress",
+                "ec2:DisassociateAddress",
+                "ec2:DescribeAddresses",
+                "ec2:DescribeNetworkInterfaces",
+                "ec2:CreateTags",
+                "ec2:AssociateAddress",
+                "ec2:AllocateAddress",
+                "shield:DeleteProtection",
+                "shield:DescribeProtection",
+                "shield:DescribeSubscription",
+                "shield:CreateProtection"
+            ],
+            "Resource": "*"
+        }
+    ]
+}
+EOF
+aws iam create-policy \
+    --policy-name AWSPodEIPControllerIAMPolicy \
+    --policy-document file://iam-policy.json
+```
+
+Create an IAM role and Kubernetes ServiceAccount for the controller.
+
+```shell
+eksctl create iamserviceaccount \
+    --cluster=eip-controller-demo \
+    --namespace=kube-system \
+    --name=aws-pod-eip-controller \
+    --attach-policy-arn=arn:aws:iam::${ACCOUNT_ID}:policy/AWSPodEIPControllerIAMPolicy \
+    --override-existing-serviceaccounts \
+    --region ${AWS_REGION} \
+    --approve
+```
+
+Modify the contents of template.yaml in aws-pod-eip-controller and deploy.
+
+```shell
+sed -i '' "s/<cluster-name>/eip-controller-demo/g" template.yaml
+sed -i '' "s/<watch-namespace>/nginx-demo-ns/g" template.yaml
+sed -i '' "s/<account>/${ACCOUNT_ID}/g" template.yaml
+sed -i '' "s/<region-code>/${AWS_REGION}/g" template.yaml
+kubectl apply -f template.yaml
+```
+
+**Note**: The implementation of the example can be found in [aws-samples/aws-pod-eip-controller](https://github.com/aws-samples/aws-pod-eip-controller) repo.
+
+ This command will create the aws-pod-eip-controller deployment in the kube-system namespace.
+
+![aws-pod-eip-controller deployment](images/aws-pod-eip-controller%20deployment.png)
+
+### Deploy the sample deployment
 
 ```shell
 cat << EOF > nginx.demo.yaml
@@ -170,3 +216,49 @@ spec:
 EOF
 kubectl apply -f nginx.demo.yaml
 ```
+
+**Note**: In the deployment, two annotations were added to the metadata of the template.
+
+Run this command to see the name of the Pod.
+
+```shell
+kubectl get pod -n nginx-demo-ns
+```
+
+![demo pod](images/demo%20pod.png)
+
+Run this command to see the associated EIP.
+
+```shell
+kubectl get pods <your-pod-name> \
+    -o=custom-columns=NAME:.metadata.name,STATUS:.status.phase,PODIP:.status.podIP,EIP:.metadata.labels.aws-pod-eip-controller-public-ip \
+    -n nginx-demo-ns \
+    -w
+```
+
+**Note**: Replace the pod name.
+
+![watch pod](images/watch%20pod.png)
+
+**Note**: In the security group where this EIP is located, adding an access rule for port 80 will allow you to access the Pod through the EIP.
+
+## Cleanup
+
+To avoid charges, delete your AWS resources.
+
+```shell
+kubectl delete -f nginx.demo.yaml
+```
+
+**Note**: Deleting the deployment will cause the controller to release the associated EIP.
+
+```shell
+eksctl delete cluster -f eip-demo-cluster.yaml
+aws iam delete-policy \
+    --policy-arn arn:aws:iam::${ACCOUNT_ID}:policy/AWSPodEIPControllerIAMPolicy
+aws ecr delete-repository --repository-name aws-pod-eip-controller --force
+```
+
+## Conclusion
+
+In this post, you deployed the EIP controller in an EKS cluster. By listening to Pod creation and deletion events, it associates and disassociates EIP for Pods annotated with specific annotations. This simplifies application access. Pods can be directly accessed via EIP without needing additional Load Balancers or Ingress Controllers. It enables automated operations. The annotations and controller approach fully automates the EIP allocation and release process without requiring human intervention. It also improves security. The EIP can be directly added to AWS Shield Advanced for DDoS protection.
