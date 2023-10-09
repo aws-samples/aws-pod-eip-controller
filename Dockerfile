@@ -2,7 +2,6 @@ FROM public.ecr.aws/docker/library/golang:1.19.6 as builder
 
 COPY go.mod go.sum /workspace/
 WORKDIR /workspace
-ENV GOPROXY="https://goproxy.cn"
 RUN go mod download
 
 COPY main.go main.go
