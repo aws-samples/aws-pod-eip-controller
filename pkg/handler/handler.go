@@ -76,7 +76,7 @@ func NewHandler(logger *slog.Logger, coreClient clientv1.CoreV1Interface, eniCli
 	return h
 }
 
-func (h *Handler) AddUpdate(key string, pod v1.Pod) error {
+func (h *Handler) AddOrUpdate(key string, pod v1.Pod) error {
 	if pod.Status.PodIP == "" {
 		h.logger.Debug(fmt.Sprintf("pod %s in phase %s does not have IP, skipping", key, pod.Status.Phase))
 		return nil
@@ -133,7 +133,7 @@ func (h *Handler) newPodChannel(key string) chan<- PodEvent {
 	go func() {
 		for e := range events {
 			h.logger.Info(fmt.Sprintf("got pod event %s IP %s", e.Key, e.IP))
-			if err := h.addUpdateEvent(e); err != nil {
+			if err := h.addOrUpdateEvent(e); err != nil {
 				h.logger.Error(err.Error())
 			}
 		}
@@ -147,7 +147,7 @@ func (h *Handler) newPodChannel(key string) chan<- PodEvent {
 	return events
 }
 
-func (h *Handler) addUpdateEvent(event PodEvent) error {
+func (h *Handler) addOrUpdateEvent(event PodEvent) error {
 	isAssociated, err := h.eniClient.HasAssociatedAddress(event.IP)
 	if err != nil {
 		return fmt.Errorf("check if pod %s ip %s is associated: %w", event.Key, event.IP, err)

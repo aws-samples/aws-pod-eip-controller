@@ -14,7 +14,7 @@ import (
 const maxQueueRetries = 3
 
 type PodHandler interface {
-	AddUpdate(key string, pod v1.Pod) error
+	AddOrUpdate(key string, pod v1.Pod) error
 	Delete(key string) error
 }
 
@@ -74,5 +74,5 @@ func (w *podWorker) processItem(key string) error {
 		pod = *obj.(*v1.Pod)
 	}
 	w.logger.Debug(fmt.Sprintf("key %s found in store, calling handler add/update", key))
-	return w.handler.AddUpdate(key, pod)
+	return w.handler.AddOrUpdate(key, pod)
 }
