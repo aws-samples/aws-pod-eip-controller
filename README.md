@@ -1,6 +1,9 @@
 # AWS Pod EIP Controller
 
-The AWS Pod EIP Controller (PEC) offers a function to automatically allocate and release Elastic IPs via annotations. It also enables automatic association of allocated EIPs with the PODs and provides the ability to add EIPs to Shied protection via annotations. This feature enhances security by allowing for better control over IP addresses used in AWS resources.
+The AWS Pod EIP Controller (PEC) offers a function to automatically allocate and release Elastic IPs via annotations.
+It also enables automatic association of allocated EIPs with the PODs and provides the ability to add EIPs to Shied
+protection via annotations. This feature enhances security by allowing for better control over IP addresses used in AWS
+resources.
 
 ## Overview
 
@@ -10,29 +13,28 @@ The solution processes EIP and Shield for Pods through the following steps:
 
 1. Informers listen for Pod events through List and Watch, and push them to the DeltaFIFO
 2. DeltaFIFO sends the acquired events to the WorkQueue  
-3. The Processor handles the events; based on the annotation information in the Pod events, it uses the AWS SDK to add/remove EIP and join/leave the Shield resource protection for the Pod
+3. The Processor handles the events; based on the annotation information in the Pod events, it uses the AWS SDK
+   to add/remove EIP and join/leave the Shield resource protection for the Pod
 
 ## Annotations
 
-Name|Type|Default|Location
--|-|-|-
-aws-samples.github.com/aws-pod-eip-controller-type|string|auto|pod
-aws-samples.github.com/aws-pod-eip-controller-shield|string|advanced|pod
+| Name                                                 | Type   | Default  | Location |
+|------------------------------------------------------|--------|----------|----------|
+| aws-samples.github.com/aws-pod-eip-controller-type   | string | auto     | pod      |
+| aws-samples.github.com/aws-pod-eip-controller-shield | string | advanced | pod      |
 
-## config.yaml
+## Config
 
-Name|Type|Default|Describetion
--|-|-|-
-vpcID|string|N/A|need to provide when debugging locally or deploying in fargate
-region|string|N/A|need to provide when debugging locally or deploying in fargate
-watchNamespace|string|''|which namespace to listen on only, Empty to listen to all
-clusterName|string|''|eks cluster name
-channelsize|int|20|number of pipelines
-resyncPeriod|int|60|informer resync period, 0 to disable resync
-log.level|string|info|log level: panic fatal error warn info debug trace
-log.format|string|json|log format: text or json
-recycleOption.enable|bool|false|whether recycle the eips which do not attach any pod
-recycleOption.period|int|3600|period for rcycle the check the eips that do not attach any pod, 0 to check once on start
+| Flag            | Chart Value          | Type    | Default | Describetion                                                   |
+|-----------------|----------------------|---------|---------|----------------------------------------------------------------|
+| N/A             | image                | string  | ''      | aws pod eip controller docker image to deploy                  |
+| kubeconfig      | N/A                  | string  | ''      | kubeconfig path, need to provide when debugging locally        |
+| vpc-id          | vpcID                | string  | ''      | need to provide when debugging locally or deploying in fargate |
+| region          | region               | string  | ''      | need to provide when debugging locally or deploying in fargate |
+| watch-namespace | watchNamespace       | string  | ''      | which namespace to listen on only, empty to listen to all      |
+| cluster-name    | clusterName          | string  | ''      | eks cluster name                                               |
+| log-level       | logLevel             | string  | info    | log level: debug, info, warn, error                            |
+| N/A             | createServiceAccount | boolean | false   | whether the helm chart should create service account           |
 
 ## Prerequisites
 
@@ -56,7 +58,8 @@ export AWS_REGION=<your-region>
 
 **Note**: Replace the region where your EKS cluster is deployed.
 
-This command will concurrently create a node group called main. The node group will have instances of type m5.large and will be deployed in the public subnet.
+This command will concurrently create a node group called main. The node group will have instances of type m5.large
+and will be deployed in the public subnet.
 
 ```shell
 cat << EOF > eip-demo-cluster.yaml
@@ -152,14 +155,13 @@ eksctl create iamserviceaccount \
     --approve
 ```
 
-Modify the contents of template.yaml in aws-pod-eip-controller and deploy.
+Deploy aws-pod-eip-controller helm chart
 
 ```shell
-sed -i '' "s/<cluster-name>/eip-controller-demo/g" template.yaml
-sed -i '' "s/<watch-namespace>/nginx-demo-ns/g" template.yaml
-sed -i '' "s/<account>/${ACCOUNT_ID}/g" template.yaml
-sed -i '' "s/<region-code>/${AWS_REGION}/g" template.yaml
-kubectl apply -f template.yaml
+helm install controller ./charts/aws-pod-eip-controller \
+  --namespace kube-system \
+  --set image=${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/aws-pod-eip-controller:latest \
+  --wait
 ```
 
 **Note**: The implementation of the example can be found in [aws-samples/aws-pod-eip-controller](https://github.com/aws-samples/aws-pod-eip-controller) repo.
@@ -240,7 +242,8 @@ kubectl get pods <your-pod-name> \
 
 ![watch pod](images/watch%20pod.png)
 
-**Note**: In the security group where this EIP is located, adding an access rule for port 80 will allow you to access the Pod through the EIP.
+**Note**: In the security group where this EIP is located, adding an access rule for port 80 will allow you to access
+the Pod through the EIP.
 
 ## Cleanup
 
@@ -261,4 +264,9 @@ aws ecr delete-repository --repository-name aws-pod-eip-controller --force
 
 ## Conclusion
 
-In this post, you deployed the EIP controller in an EKS cluster. By listening to Pod creation and deletion events, it associates and disassociates EIP for Pods annotated with specific annotations. This simplifies application access. Pods can be directly accessed via EIP without needing additional Load Balancers or Ingress Controllers. It enables automated operations. The annotations and controller approach fully automates the EIP allocation and release process without requiring human intervention. It also improves security. The EIP can be directly added to AWS Shield Advanced for DDoS protection.
+In this post, you deployed the EIP controller in an EKS cluster. By listening to Pod creation and deletion events,
+it associates and disassociates EIP for Pods annotated with specific annotations. This simplifies application access.
+Pods can be directly accessed via EIP without needing additional Load Balancers or Ingress Controllers. It enables
+automated operations. The annotations and controller approach fully automates the EIP allocation and release process
+without requiring human intervention. It also improves security. The EIP can be directly added to AWS Shield Advanced
+for DDoS protection.
