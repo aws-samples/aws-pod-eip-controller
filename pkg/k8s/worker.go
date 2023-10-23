@@ -39,6 +39,7 @@ func newPodWorker(logger *slog.Logger, queue workqueue.RateLimitingInterface, in
 func (w *podWorker) run() {
 	for w.processNextItem() {
 	}
+	// TODO - send shutdown signal to the handler
 }
 
 func (w *podWorker) processNextItem() bool {

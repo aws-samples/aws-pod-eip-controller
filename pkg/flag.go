@@ -41,8 +41,8 @@ func ParseFlags() Flags {
 	f.StringVar(&flags.Kubeconfig, "kubeconfig", getStringEnv("PEC_KUBECONFIG", ""), "kubeconfig path, set only if controller should NOT be in the cluster")
 	f.StringVar(&flags.ClusterName, "cluster-name", getStringEnv("PEC_CLUSTER_NAME", ""), "cluster name")
 	f.StringVar(&flags.VpcID, "vpc-id", getStringEnv("PEC_VPC_ID", ""), "AWS vpc id")
-	f.StringVar(&flags.VpcID, "region", getStringEnv("PEC_REGION", ""), "AWS region")
-	f.StringVar(&flags.VpcID, "watch-namespace", getStringEnv("PEC_WATCH_NAMESPACE", ""), "namespace to watch, empty will watch all namespaces")
+	f.StringVar(&flags.Region, "region", getStringEnv("PEC_REGION", ""), "AWS region")
+	f.StringVar(&flags.WatchNamespace, "watch-namespace", getStringEnv("PEC_WATCH_NAMESPACE", ""), "namespace to watch, empty will watch all namespaces")
 
 	if err := f.Parse(os.Args[1:]); err != nil {
 		fmt.Printf("parse flags: %v", err)
