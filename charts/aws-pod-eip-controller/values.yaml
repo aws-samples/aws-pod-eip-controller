@@ -1,0 +1,7 @@
+image: ""
+logLevel: DEBUG
+clusterName: ""
+vpcID: ""
+region: ""
+# set to empty string to watch all namespaces
+watchNamespace: ""

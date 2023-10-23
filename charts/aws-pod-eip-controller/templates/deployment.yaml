@@ -1,0 +1,48 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Chart.Name }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/version: {{ .Chart.Version }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Chart.Name }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ .Chart.Name }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/version: {{ .Chart.Version }}
+    spec:
+      serviceAccountName: {{ .Release.Name }}
+      containers:
+      - name: {{ .Chart.Name }}
+        image: {{ .Values.image }}
+        imagePullPolicy: IfNotPresent
+        env:
+          - name: PEC_LOG_LEVEL
+            value: {{ .Values.logLevel }}
+          - name: PEC_CLUSTER_NAME
+            value: {{ .Values.clusterName }}
+          - name: PEC_VPC_ID
+            value: {{ .Values.vpcID }}
+          - name: PEC_REGION
+            value: {{ .Values.region }}
+          - name: PEC_WATCH_NAMESPACE
+            value: {{ .Values.watchNamespace }}
+        resources:
+          limits:
+            cpu: 150m
+            memory: 256Mi
+          requests:
+            cpu: 150m
+            memory: 256Mi
