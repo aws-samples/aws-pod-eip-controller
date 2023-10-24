@@ -9,7 +9,6 @@ import (
 	"github.com/aws-samples/aws-pod-eip-controller/pkg"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
@@ -132,11 +131,7 @@ func (c *PodController) Run(stopCh <-chan struct{}) {
 }
 
 func (c *PodController) addAddEvent(key string, obj interface{}) bool {
-	pod, err := toPod(obj)
-	if err != nil {
-		c.logger.Error(fmt.Sprintf("add add event %s old pod: %v", key, err))
-		return false
-	}
+	pod := c.toPod(key, obj)
 
 	// pod has annotation
 	if v, ok := pod.Annotations[pkg.PodEIPAnnotationKey]; ok && v == pkg.PodEIPAnnotationValue {
@@ -152,16 +147,8 @@ func (c *PodController) addAddEvent(key string, obj interface{}) bool {
 }
 
 func (c *PodController) addUpdateEvent(key string, oldObj, newObj interface{}) bool {
-	oldPod, err := toPod(oldObj)
-	if err != nil {
-		c.logger.Error(fmt.Sprintf("add update event %s old pod: %v", key, err))
-		return false
-	}
-	newPod, err := toPod(newObj)
-	if err != nil {
-		c.logger.Error(fmt.Sprintf("add update event %s new pod: %v", key, err))
-		return false
-	}
+	oldPod := c.toPod(key, oldObj)
+	newPod := c.toPod(key, newObj)
 
 	// annotation changed
 	oldEIPAnnotation := oldPod.Annotations[pkg.PodEIPAnnotationKey]
@@ -192,13 +179,7 @@ func (c *PodController) addUpdateEvent(key string, oldObj, newObj interface{}) b
 }
 
 func (c *PodController) addDeleteEvent(key string, obj interface{}) bool {
-	pod, err := toPod(obj)
-	if err != nil {
-		c.logger.Error(fmt.Sprintf("add delete event %s pod: %v", key, err))
-		return false
-	}
-
-	if v, ok := pod.Annotations[pkg.PodEIPAnnotationKey]; ok && v == pkg.PodEIPAnnotationValue {
+	if v, ok := c.toPod(key, obj).Annotations[pkg.PodEIPAnnotationKey]; ok && v == pkg.PodEIPAnnotationValue {
 		c.logger.Info(fmt.Sprintf("add delete event %s annotation %s=%s is present", key, pkg.PodEIPAnnotationKey, pkg.PodEIPAnnotationValue))
 		return true
 	}
@@ -206,10 +187,10 @@ func (c *PodController) addDeleteEvent(key string, obj interface{}) bool {
 	return false
 }
 
-func toPod(obj interface{}) (v1.Pod, error) {
-	var pod v1.Pod
-	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(obj.(*unstructured.Unstructured).Object, &pod); err != nil {
-		return pod, fmt.Errorf("convert object to pod: %v", err)
+func (c *PodController) toPod(key string, obj interface{}) v1.Pod {
+	if obj == nil {
+		c.logger.Error(fmt.Sprintf("%s cannot convert nil to pod", key))
+		return v1.Pod{}
 	}
-	return pod, nil
+	return *obj.(*v1.Pod)
 }
