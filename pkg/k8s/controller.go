@@ -150,22 +150,31 @@ func (c *PodController) addUpdateEvent(key string, oldObj, newObj interface{}) b
 	oldPod := c.toPod(key, oldObj)
 	newPod := c.toPod(key, newObj)
 
-	// annotation changed
 	oldEIPAnnotation := oldPod.Annotations[pkg.PodEIPAnnotationKey]
 	newEIPAnnotation := newPod.Annotations[pkg.PodEIPAnnotationKey]
-	if oldEIPAnnotation != newEIPAnnotation {
-		c.logger.Info(fmt.Sprintf("add update event %s annotation %s changed from %s to %s", key, pkg.PodEIPAnnotationKey, oldEIPAnnotation, newEIPAnnotation))
-		return true
-	}
-	// new pod has annotation
-	if v, ok := newPod.Annotations[pkg.PodEIPAnnotationKey]; ok && v == pkg.PodEIPAnnotationValue {
-		// and IP changed
+
+	// new or old pod has annotation
+	if newEIPAnnotation == pkg.PodEIPAnnotationValue || oldEIPAnnotation == pkg.PodEIPAnnotationValue {
+		// old and new pod does not have IP
+		if oldPod.Status.PodIP == "" && newPod.Status.PodIP == "" {
+			c.logger.Info(fmt.Sprintf("add update event %s pod does not have ip", key))
+			return false
+		}
+
+		// annotation changed
+		if oldEIPAnnotation != newEIPAnnotation {
+			c.logger.Info(fmt.Sprintf("add update event %s annotation %s changed from %s to %s", key, pkg.PodEIPAnnotationKey, oldEIPAnnotation, newEIPAnnotation))
+			return true
+		}
+
+		// IP changed
 		oldIP := oldPod.Status.PodIP
 		newIP := newPod.Status.PodIP
 		if oldIP != newIP {
 			c.logger.Info(fmt.Sprintf("add update event %s ip changed from %s to %s", key, oldIP, newIP))
 			return true
 		}
+
 		// label changed
 		oldIPLabel := oldPod.Labels[pkg.PodPublicIPLabel]
 		newIPLabel := newPod.Labels[pkg.PodPublicIPLabel]
