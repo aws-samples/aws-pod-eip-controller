@@ -5,7 +5,7 @@ package k8s
 
 import (
 	"fmt"
-	v1 "k8s.io/api/core/v1"
+	"k8s.io/api/core/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 	"log/slog"
@@ -22,11 +22,11 @@ type podWorker struct {
 	logger          *slog.Logger
 	queue           workqueue.RateLimitingInterface
 	maxQueueRetries int
-	indexer         cache.Indexer
+	indexer         cache.KeyGetter
 	handler         PodHandler
 }
 
-func newPodWorker(logger *slog.Logger, queue workqueue.RateLimitingInterface, indexer cache.Indexer, handler PodHandler) *podWorker {
+func newPodWorker(logger *slog.Logger, queue workqueue.RateLimitingInterface, indexer cache.KeyGetter, handler PodHandler) *podWorker {
 	return &podWorker{
 		logger:          logger.With("component", "worker"),
 		queue:           queue,
@@ -43,20 +43,30 @@ func (w *podWorker) run() {
 }
 
 func (w *podWorker) processNextItem() bool {
+	// rate limiting queue life cycle
+	// https://docs.bitnami.com/tutorials/_next/static/images/key-lifecicle-workqueue-4e3c30ed8a09c28cceb2247fb776b548.png.webp
 	key, shutdown := w.queue.Get()
 	if shutdown {
 		w.logger.Info("received queue shut down")
 		return false
 	}
+
 	// done has to be called when we finished processing the item
 	defer w.queue.Done(key)
 
+	retries := w.queue.NumRequeues(key)
 	if err := w.processItem(key.(string)); err != nil {
 		w.logger.Error(fmt.Sprintf("process item: %v", err))
-		return true
+		if retries < maxQueueRetries {
+			// calling done in defer, but not forget, we still can retry
+			w.logger.Error(fmt.Sprintf("process item retry %d out of %d, retrying: %v", retries, maxQueueRetries, err))
+			w.queue.AddRateLimited(key)
+			return true
+		}
+		w.logger.Error(fmt.Sprintf("process item retries exceeded, retried %d out of %d: %v", retries, maxQueueRetries, err))
 	}
 
-	// if no error occurs we forget this item, so it does not have any delay when another change happens
+	// if no error occurs, or number of retries exceeded we forget this item, so it does not have any delay when another change happens
 	w.queue.Forget(key)
 	return true
 }

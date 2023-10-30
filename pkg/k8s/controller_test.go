@@ -3,16 +3,13 @@ package k8s
 import (
 	"github.com/aws-samples/aws-pod-eip-controller/pkg"
 	"github.com/stretchr/testify/assert"
-	"io"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"log/slog"
 	"testing"
 )
 
 var (
-	testKey        = "default/test-pod"
-	testController = PodController{logger: slog.New(slog.NewJSONHandler(io.Discard, nil))}
+	testController = PodController{logger: noOpLogger}
 )
 
 func Test_addAddEvent(t *testing.T) {

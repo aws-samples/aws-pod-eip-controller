@@ -73,7 +73,7 @@ func (c EC2Client) DisassociateAddress(podKey string) error {
 		return err
 	}
 	if len(addrs) == 0 {
-		c.logger.Info("no address found for %s pod", podKey)
+		c.logger.Info(fmt.Sprintf("no address found for %s pod", podKey))
 		return nil
 	}
 	if err := c.deleteTag(addrs[0].allocationID, pkg.TagPodKey); err != nil {
