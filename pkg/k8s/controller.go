@@ -78,7 +78,7 @@ func (c *PodController) addEventHandlers() error {
 			}
 
 			c.logger.Debug(fmt.Sprintf("add event %s added to queue", key))
-			c.queue.Add(key)
+			c.queue.AddRateLimited(key)
 		},
 		UpdateFunc: func(oldObj, newObj interface{}) {
 			key, err := cache.MetaNamespaceKeyFunc(newObj)
@@ -92,7 +92,7 @@ func (c *PodController) addEventHandlers() error {
 			}
 
 			c.logger.Debug(fmt.Sprintf("update event %s added to queue", key))
-			c.queue.Add(key)
+			c.queue.AddRateLimited(key)
 		},
 		DeleteFunc: func(obj interface{}) {
 			key, err := cache.DeletionHandlingMetaNamespaceKeyFunc(obj)
@@ -106,7 +106,7 @@ func (c *PodController) addEventHandlers() error {
 			}
 
 			c.logger.Debug(fmt.Sprintf("delete event %s added to queue", key))
-			c.queue.Add(key)
+			c.queue.AddRateLimited(key)
 		},
 	})
 	return err
