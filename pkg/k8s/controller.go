@@ -149,53 +149,18 @@ func (c *PodController) addAddEvent(key string, obj interface{}) bool {
 }
 
 func (c *PodController) addUpdateEvent(key string, oldObj, newObj interface{}) bool {
-	oldPod := c.toPod(key, oldObj)
 	newPod := c.toPod(key, newObj)
 
-	oldEIPAnnotation := oldPod.Annotations[pkg.PodEIPAnnotationKey]
-	newEIPAnnotation := newPod.Annotations[pkg.PodEIPAnnotationKey]
-
-	// new or old pod has annotation
-	if newEIPAnnotation == pkg.PodEIPAnnotationValue || oldEIPAnnotation == pkg.PodEIPAnnotationValue {
-		// old and new pod does not have IP
-		if oldPod.Status.PodIP == "" && newPod.Status.PodIP == "" {
-			c.logger.Info(fmt.Sprintf("add update event %s pod does not have ip", key))
-			return false
-		}
-
-		// annotation changed
-		if oldEIPAnnotation != newEIPAnnotation {
-			c.logger.Info(fmt.Sprintf("add update event %s annotation %s changed from %s to %s", key, pkg.PodEIPAnnotationKey, oldEIPAnnotation, newEIPAnnotation))
-			return true
-		}
-
-		// IP changed
-		oldIP := oldPod.Status.PodIP
-		newIP := newPod.Status.PodIP
-		if oldIP != newIP {
-			c.logger.Info(fmt.Sprintf("add update event %s ip changed from %s to %s", key, oldIP, newIP))
-			return true
-		}
-
-		// label changed
-		oldIPLabel := oldPod.Labels[pkg.PodPublicIPLabel]
-		newIPLabel := newPod.Labels[pkg.PodPublicIPLabel]
-		if oldIPLabel != newIPLabel {
-			c.logger.Info(fmt.Sprintf("add update event %s ip label %s changed from %s to %s", key, pkg.PodPublicIPLabel, oldIPLabel, newIPLabel))
-			return true
-		}
+	if newPod.Status.PodIP == "" {
+		c.logger.Info(fmt.Sprintf("add update event %s pod does not have ip", key))
+		return false
 	}
-	c.logger.Debug(fmt.Sprintf("skipping add update event %s", key))
-	return false
+	return true
 }
 
 func (c *PodController) addDeleteEvent(key string, obj interface{}) bool {
-	if v, ok := c.toPod(key, obj).Annotations[pkg.PodEIPAnnotationKey]; ok && v == pkg.PodEIPAnnotationValue {
-		c.logger.Info(fmt.Sprintf("add delete event %s annotation %s=%s is present", key, pkg.PodEIPAnnotationKey, pkg.PodEIPAnnotationValue))
-		return true
-	}
-	c.logger.Debug(fmt.Sprintf("delete event %s pod does not have %s annotation, skipping", key, pkg.PodEIPAnnotationKey))
-	return false
+	// should add to queue for handler to delete the cache status map
+	return true
 }
 
 func (c *PodController) toPod(key string, obj interface{}) v1.Pod {

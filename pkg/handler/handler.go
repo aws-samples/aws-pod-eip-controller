@@ -27,12 +27,13 @@ type ENIClient interface {
 }
 
 type PodEvent struct {
-	Key         string
-	Name        string
-	Namespace   string
-	Annotations map[string]string
-	Labels      map[string]string
-	IP          string
+	Key             string
+	Name            string
+	Namespace       string
+	Annotations     map[string]string
+	Labels          map[string]string
+	IP              string
+	ResourceVersion string
 }
 
 func (p PodEvent) HasEIPAnnotation() bool {
@@ -49,30 +50,33 @@ func (p PodEvent) GetPublicIPLabel() (string, bool) {
 
 func NewPodEvent(key string, pod v1.Pod) PodEvent {
 	return PodEvent{
-		Key:         key,
-		Name:        pod.Name,
-		Namespace:   pod.Namespace,
-		Annotations: pod.Annotations,
-		Labels:      pod.Labels,
-		IP:          pod.Status.PodIP,
+		Key:             key,
+		Name:            pod.Name,
+		Namespace:       pod.Namespace,
+		Annotations:     pod.Annotations,
+		Labels:          pod.Labels,
+		IP:              pod.Status.PodIP,
+		ResourceVersion: pod.ResourceVersion,
 	}
 }
 
 type Handler struct {
-	logger     *slog.Logger
-	mux        *sync.RWMutex
-	coreClient clientv1.CoreV1Interface
-	eniClient  ENIClient
-	podEvents  map[string]chan<- PodEvent
+	logger        *slog.Logger
+	mux           *sync.RWMutex
+	coreClient    clientv1.CoreV1Interface
+	eniClient     ENIClient
+	podEvents     map[string]chan<- PodEvent
+	cacheEventMap sync.Map
 }
 
 func NewHandler(logger *slog.Logger, coreClient clientv1.CoreV1Interface, eniClient ENIClient) *Handler {
 	h := &Handler{
-		logger:     logger.With("component", "handler"),
-		mux:        &sync.RWMutex{},
-		coreClient: coreClient,
-		eniClient:  eniClient,
-		podEvents:  make(map[string]chan<- PodEvent),
+		logger:        logger.With("component", "handler"),
+		mux:           &sync.RWMutex{},
+		coreClient:    coreClient,
+		eniClient:     eniClient,
+		podEvents:     make(map[string]chan<- PodEvent),
+		cacheEventMap: sync.Map{},
 	}
 	return h
 }
@@ -100,6 +104,7 @@ func (h *Handler) AddOrUpdate(key string, pod v1.Pod) error {
 func (h *Handler) Delete(key string) error {
 	h.logger.Info(fmt.Sprintf("received pod delete %s, deleting channel", key))
 	h.deletePodChannel(key)
+	h.cacheEventMap.Delete(key)
 	return nil
 }
 
@@ -134,8 +139,15 @@ func (h *Handler) newPodChannel(key string) chan<- PodEvent {
 	go func() {
 		for e := range events {
 			h.logger.Info(fmt.Sprintf("got pod event %s IP %s", e.Key, e.IP))
+			if h.sameStatusInCache(e.Key, e) {
+				h.logger.Debug(fmt.Sprintf("pod %s has same status in cache, skipping", e.Key))
+				continue
+			}
 			if err := h.addOrUpdateEvent(e); err != nil {
 				h.logger.Error(err.Error())
+			} else {
+				// update the cache status
+				h.cacheEventMap.Store(e.Key, e)
 			}
 		}
 		// channel closed, pod has been deleted
@@ -146,6 +158,25 @@ func (h *Handler) newPodChannel(key string) chan<- PodEvent {
 		}
 	}()
 	return events
+}
+
+// sameStatusInCache checks if the pod event is the same as the one in cache
+func (h *Handler) sameStatusInCache(key string, evnet PodEvent) bool {
+	if v, ok := h.cacheEventMap.Load(key); ok {
+		// resouce version is the same, no need to process
+		if v.(PodEvent).ResourceVersion == evnet.ResourceVersion {
+			return true
+		}
+		// annotation is the same, no need to process
+		if v.(PodEvent).Annotations[pkg.PodEIPAnnotationKey] == evnet.Annotations[pkg.PodEIPAnnotationKey] {
+			return true
+		}
+		// annotation is not the same, but both are not set to auto, no need to process
+		if v.(PodEvent).Annotations[pkg.PodEIPAnnotationKey] != pkg.PodEIPAnnotationValue && evnet.Annotations[pkg.PodEIPAnnotationKey] != pkg.PodEIPAnnotationValue {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *Handler) addOrUpdateEvent(event PodEvent) error {
@@ -195,7 +226,7 @@ func (h *Handler) addOrUpdateEvent(event PodEvent) error {
 
 func (h *Handler) patchPublicIPLabel(event PodEvent, op, value string) error {
 	patch := []byte(fmt.Sprintf(`[{"op":"%s","path":"/metadata/labels/%s","value":"%s"}]`, op, pkg.PodPublicIPLabel, value))
-	if value == "remove" {
+	if op == "remove" {
 		patch = []byte(fmt.Sprintf(`[{"op":"%s","path":"/metadata/labels/%s"}]`, op, pkg.PodPublicIPLabel))
 	}
 	if _, err := h.coreClient.Pods(event.Namespace).Patch(context.Background(), event.Name, types.JSONPatchType, patch, metav1.PatchOptions{}); err != nil {
