@@ -21,7 +21,6 @@ The solution processes EIP and Shield for Pods through the following steps:
 | Name                                                 | Type   | Default  | Location |
 |------------------------------------------------------|--------|----------|----------|
 | aws-samples.github.com/aws-pod-eip-controller-type   | string | auto     | pod      |
-| aws-samples.github.com/aws-pod-eip-controller-shield | string | advanced | pod      |
 
 ## Config
 
@@ -35,6 +34,7 @@ The solution processes EIP and Shield for Pods through the following steps:
 | cluster-name    | clusterName          | string  | ''      | eks cluster name                                               |
 | log-level       | logLevel             | string  | info    | log level: debug, info, warn, error                            |
 | N/A             | createServiceAccount | boolean | false   | whether the helm chart should create service account           |
+| resync-period   | resyncPeriod         | int     | 0       | the resync-period for informer                                 |
 
 ## Prerequisites
 
