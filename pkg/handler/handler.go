@@ -195,8 +195,8 @@ func (h *Handler) addOrUpdateEvent(event PodEvent) error {
 
 func (h *Handler) patchPublicIPLabel(event PodEvent, op, value string) error {
 	patch := []byte(fmt.Sprintf(`[{"op":"%s","path":"/metadata/labels/%s","value":"%s"}]`, op, pkg.PodPublicIPLabel, value))
-	if value == "None" {
-		patch = []byte(fmt.Sprintf(`[{"op":"%s","path":"/metadata/labels/%s","value":%s}]`, op, pkg.PodPublicIPLabel, value))
+	if value == "remove" {
+		patch = []byte(fmt.Sprintf(`[{"op":"%s","path":"/metadata/labels/%s"}]`, op, pkg.PodPublicIPLabel))
 	}
 	if _, err := h.coreClient.Pods(event.Namespace).Patch(context.Background(), event.Name, types.JSONPatchType, patch, metav1.PatchOptions{}); err != nil {
 		return fmt.Errorf("patch pod %s, %s label: %w", event.Key, op, err)
