@@ -6,13 +6,14 @@ package handler
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"sync"
+
 	"github.com/aws-samples/aws-pod-eip-controller/pkg"
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	clientv1 "k8s.io/client-go/kubernetes/typed/core/v1"
-	"log/slog"
-	"sync"
 )
 
 const (
@@ -193,7 +194,10 @@ func (h *Handler) addOrUpdateEvent(event PodEvent) error {
 }
 
 func (h *Handler) patchPublicIPLabel(event PodEvent, op, value string) error {
-	patch := []byte(fmt.Sprintf(`[{"op":"%s","path":"/metadata/labels/%s","value":%s}]`, op, pkg.PodPublicIPLabel, value))
+	patch := []byte(fmt.Sprintf(`[{"op":"%s","path":"/metadata/labels/%s","value":"%s"}]`, op, pkg.PodPublicIPLabel, value))
+	if value == "None" {
+		patch = []byte(fmt.Sprintf(`[{"op":"%s","path":"/metadata/labels/%s","value":%s}]`, op, pkg.PodPublicIPLabel, value))
+	}
 	if _, err := h.coreClient.Pods(event.Namespace).Patch(context.Background(), event.Name, types.JSONPatchType, patch, metav1.PatchOptions{}); err != nil {
 		return fmt.Errorf("patch pod %s, %s label: %w", event.Key, op, err)
 	}
