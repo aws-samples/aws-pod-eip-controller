@@ -39,6 +39,8 @@ spec:
             value: {{ .Values.region }}
           - name: PEC_WATCH_NAMESPACE
             value: {{ .Values.watchNamespace }}
+          - name: PEC_RESYNC_PERIOD
+            value: {{ .Values.resyncPeriod }}
         resources:
           limits:
             cpu: 150m

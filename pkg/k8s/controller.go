@@ -6,6 +6,9 @@ package k8s
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"time"
+
 	"github.com/aws-samples/aws-pod-eip-controller/pkg"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -14,12 +17,6 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
-	"log/slog"
-	"time"
-)
-
-const (
-	reSyncInformer time.Duration = 0
 )
 
 type PodController struct {
@@ -29,9 +26,14 @@ type PodController struct {
 	worker   *podWorker
 }
 
-func NewPodController(logger *slog.Logger, clientset *kubernetes.Clientset, namespace string, handler PodHandler) (*PodController, error) {
+type PodControllerConfig struct {
+	Namespace    string
+	ResyncPeriod time.Duration
+}
+
+func NewPodController(logger *slog.Logger, clientset *kubernetes.Clientset, handler PodHandler, config PodControllerConfig) (*PodController, error) {
 	queue := workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter())
-	informer := newPodInformer(clientset, namespace)
+	informer := newPodInformer(clientset, config.Namespace, config.ResyncPeriod)
 	processor := newPodWorker(logger, queue, informer.GetIndexer(), handler)
 
 	controller := &PodController{
@@ -46,7 +48,7 @@ func NewPodController(logger *slog.Logger, clientset *kubernetes.Clientset, name
 	return controller, nil
 }
 
-func newPodInformer(clientset *kubernetes.Clientset, namespace string) cache.SharedIndexInformer {
+func newPodInformer(clientset *kubernetes.Clientset, namespace string, resyncPeriod time.Duration) cache.SharedIndexInformer {
 	return cache.NewSharedIndexInformer(
 		&cache.ListWatch{
 			ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
@@ -57,7 +59,7 @@ func newPodInformer(clientset *kubernetes.Clientset, namespace string) cache.Sha
 			},
 		},
 		&v1.Pod{},
-		reSyncInformer,
+		resyncPeriod,
 		cache.Indexers{},
 	)
 }

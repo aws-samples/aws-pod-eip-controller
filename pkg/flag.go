@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -18,6 +19,7 @@ type Flags struct {
 	VpcID          string
 	Region         string
 	WatchNamespace string
+	ResyncPeriod   int
 }
 
 func (f Flags) SlogLevel() slog.Level {
@@ -43,6 +45,7 @@ func ParseFlags() Flags {
 	f.StringVar(&flags.VpcID, "vpc-id", getStringEnv("PEC_VPC_ID", ""), "AWS vpc id")
 	f.StringVar(&flags.Region, "region", getStringEnv("PEC_REGION", ""), "AWS region")
 	f.StringVar(&flags.WatchNamespace, "watch-namespace", getStringEnv("PEC_WATCH_NAMESPACE", ""), "namespace to watch, empty will watch all namespaces")
+	f.IntVar(&flags.ResyncPeriod, "resync-period", getIntEnv("PEC_RESYNC_PERIOD", 0), "resync period in seconds, 0 means no resync")
 
 	if err := f.Parse(os.Args[1:]); err != nil {
 		fmt.Printf("parse flags: %v", err)
@@ -62,6 +65,15 @@ func ParseFlags() Flags {
 func getStringEnv(envName string, defaultValue string) string {
 	if env, ok := os.LookupEnv(envName); ok {
 		return env
+	}
+	return defaultValue
+}
+
+func getIntEnv(envName string, defaultValue int) int {
+	if env, ok := os.LookupEnv(envName); ok {
+		if IntVar, err := strconv.Atoi(env); err == nil {
+			return IntVar
+		}
 	}
 	return defaultValue
 }

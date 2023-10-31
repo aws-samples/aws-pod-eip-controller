@@ -5,6 +5,12 @@ package main
 
 import (
 	"fmt"
+	"log/slog"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
 	"github.com/aws-samples/aws-pod-eip-controller/pkg"
 	"github.com/aws-samples/aws-pod-eip-controller/pkg/aws"
 	"github.com/aws-samples/aws-pod-eip-controller/pkg/handler"
@@ -12,10 +18,6 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
-	"log/slog"
-	"os"
-	"os/signal"
-	"syscall"
 )
 
 func main() {
@@ -47,15 +49,18 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := run(logger, clientset, ec2Client); err != nil {
+	if err := run(logger, clientset, ec2Client, k8s.PodControllerConfig{
+		Namespace:    flags.WatchNamespace,
+		ResyncPeriod: time.Duration(flags.ResyncPeriod) * time.Second,
+	}); err != nil {
 		logger.Error(fmt.Sprintf("controller run: %v", err))
 		os.Exit(1)
 	}
 }
 
-func run(logger *slog.Logger, clientset *kubernetes.Clientset, eniClient handler.ENIClient) error {
+func run(logger *slog.Logger, clientset *kubernetes.Clientset, eniClient handler.ENIClient, config k8s.PodControllerConfig) error {
 	podHandler := handler.NewHandler(logger, clientset.CoreV1(), eniClient)
-	podController, err := k8s.NewPodController(logger, clientset, "", podHandler)
+	podController, err := k8s.NewPodController(logger, clientset, podHandler, config)
 	if err != nil {
 		return fmt.Errorf("new pod informer: %v", err)
 	}
