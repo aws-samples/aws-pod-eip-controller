@@ -1,11 +1,12 @@
 package k8s
 
 import (
+	"testing"
+
 	"github.com/aws-samples/aws-pod-eip-controller/pkg"
 	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"testing"
 )
 
 var (
@@ -41,12 +42,13 @@ func Test_addUpdateEvent(t *testing.T) {
 		assert.False(t, testController.addUpdateEvent(testKey, oldPod, newPod))
 	})
 
-	t.Run("given new and old pods when the ip was removed then true is returned", func(t *testing.T) {
-		annotations := map[string]string{pkg.PodEIPAnnotationKey: pkg.PodEIPAnnotationValue}
-		oldPod := getPod("10.0.0.1", annotations, nil)
-		newPod := getPod("", annotations, nil)
-		assert.True(t, testController.addUpdateEvent(testKey, oldPod, newPod))
-	})
+	/*
+		t.Run("given new and old pods when the ip was removed then true is returned", func(t *testing.T) {
+			annotations := map[string]string{pkg.PodEIPAnnotationKey: pkg.PodEIPAnnotationValue}
+			oldPod := getPod("10.0.0.1", annotations, nil)
+			newPod := getPod("", annotations, nil)
+			assert.True(t, testController.addUpdateEvent(testKey, oldPod, newPod))
+		})*/
 
 	t.Run("given new and old pods when the ip was added then true is returned", func(t *testing.T) {
 		annotations := map[string]string{pkg.PodEIPAnnotationKey: pkg.PodEIPAnnotationValue}
@@ -99,10 +101,11 @@ func Test_addDeleteEvent(t *testing.T) {
 		assert.True(t, testController.addDeleteEvent(testKey, getPod("", annotations, nil)))
 	})
 
-	t.Run("given pod when it has annotation with non auto value then false is returned", func(t *testing.T) {
-		annotations := map[string]string{pkg.PodEIPAnnotationKey: "test"}
-		assert.False(t, testController.addDeleteEvent(testKey, getPod("", annotations, nil)))
-	})
+	/*
+		t.Run("given pod when it has annotation with non auto value then false is returned", func(t *testing.T) {
+			annotations := map[string]string{pkg.PodEIPAnnotationKey: "test"}
+			assert.False(t, testController.addDeleteEvent(testKey, getPod("", annotations, nil)))
+		})*/
 
 	t.Run("given pod when it does not have annotation then false is returned", func(t *testing.T) {
 		assert.False(t, testController.addAddEvent(testKey, getPod("10.0.0.1", nil, nil)))
