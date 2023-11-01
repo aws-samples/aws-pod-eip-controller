@@ -17,6 +17,7 @@ import (
 )
 
 const (
+	// TODO - remove buffer, we should have only one pod in the channel so we always get up to date pod from the store
 	podChannelBuff = 10
 )
 
@@ -161,18 +162,18 @@ func (h *Handler) newPodChannel(key string) chan<- PodEvent {
 }
 
 // sameStatusInCache checks if the pod event is the same as the one in cache
-func (h *Handler) sameStatusInCache(key string, evnet PodEvent) bool {
+func (h *Handler) sameStatusInCache(key string, event PodEvent) bool {
 	if v, ok := h.cacheEventMap.Load(key); ok {
-		// resouce version is the same, no need to process
-		if v.(PodEvent).ResourceVersion == evnet.ResourceVersion {
+		// resource version is the same, no need to process
+		if v.(PodEvent).ResourceVersion == event.ResourceVersion {
 			return true
 		}
 		// annotation is the same, no need to process
-		if v.(PodEvent).Annotations[pkg.PodEIPAnnotationKey] == evnet.Annotations[pkg.PodEIPAnnotationKey] {
+		if v.(PodEvent).Annotations[pkg.PodEIPAnnotationKey] == event.Annotations[pkg.PodEIPAnnotationKey] {
 			return true
 		}
 		// annotation is not the same, but both are not set to auto, no need to process
-		if v.(PodEvent).Annotations[pkg.PodEIPAnnotationKey] != pkg.PodEIPAnnotationValue && evnet.Annotations[pkg.PodEIPAnnotationKey] != pkg.PodEIPAnnotationValue {
+		if v.(PodEvent).Annotations[pkg.PodEIPAnnotationKey] != pkg.PodEIPAnnotationValue && event.Annotations[pkg.PodEIPAnnotationKey] != pkg.PodEIPAnnotationValue {
 			return true
 		}
 	}

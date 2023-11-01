@@ -96,7 +96,9 @@ func (c *PodController) addFunc(obj interface{}) {
 		return
 	}
 
-	if !c.addAddEvent(key, obj) {
+	// pod does not have annotation or IP is missing
+	if p := c.toPod(key, obj); !p.hasEIPAnnotation || p.ip == "" {
+		c.logger.Debug(fmt.Sprintf("skipping add event %s", key))
 		return
 	}
 
@@ -111,7 +113,8 @@ func (c *PodController) updateFunc(oldObj, newObj interface{}) {
 		return
 	}
 
-	if !c.addUpdateEvent(key, oldObj, newObj) {
+	if c.toPod(key, newObj).ip == "" {
+		c.logger.Debug(fmt.Sprintf("skipping update event %s pod does not have ip", key))
 		return
 	}
 
@@ -126,46 +129,30 @@ func (c *PodController) deleteFunc(obj interface{}) {
 		return
 	}
 
-	if !c.addDeleteEvent(key, obj) {
-		return
-	}
-
+	// add all deleted pods to queue for handler to delete the cache status map
 	c.logger.Debug(fmt.Sprintf("delete event %s added to queue", key))
 	c.queue.Add(key)
 }
 
-func (c *PodController) addAddEvent(key string, obj interface{}) bool {
-	pod := c.toPod(key, obj)
-
-	// pod has annotation
-	if v, ok := pod.Annotations[pkg.PodEIPAnnotationKey]; ok && v == pkg.PodEIPAnnotationValue {
-		// and has IP assigned
-		if ip := pod.Status.PodIP; ip != "" {
-			c.logger.Info(fmt.Sprintf("add add event %s ip is set %s", key, ip))
-			return true
-		}
-	}
-	c.logger.Debug(fmt.Sprintf("skipping add add event %s", key))
-	return false
+type pod struct {
+	hasEIPAnnotation bool
+	ip               string
 }
 
-func (c *PodController) addUpdateEvent(key string, oldObj, newObj interface{}) bool {
-	if c.toPod(key, newObj).Status.PodIP == "" {
-		c.logger.Info(fmt.Sprintf("add update event %s pod does not have ip", key))
-		return false
-	}
-	return true
-}
-
-func (c *PodController) addDeleteEvent(key string, obj interface{}) bool {
-	// should add to queue for handler to delete the cache status map
-	return true
-}
-
-func (c *PodController) toPod(key string, obj interface{}) v1.Pod {
+func (c *PodController) toPod(key string, obj interface{}) pod {
 	if obj == nil {
 		c.logger.Error(fmt.Sprintf("%s cannot convert nil to pod", key))
-		return v1.Pod{}
+		return pod{}
 	}
-	return *obj.(*v1.Pod)
+
+	v1Pod := *obj.(*v1.Pod)
+	var hasEIPAnnotation bool
+	if v, ok := v1Pod.Annotations[pkg.PodEIPAnnotationKey]; ok && v == pkg.PodEIPAnnotationValue {
+		hasEIPAnnotation = true
+	}
+
+	return pod{
+		hasEIPAnnotation: hasEIPAnnotation,
+		ip:               v1Pod.Status.PodIP,
+	}
 }

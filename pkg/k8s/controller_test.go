@@ -11,10 +11,10 @@ import (
 
 func TestPodController_addFunc(t *testing.T) {
 	annotations := map[string]string{pkg.PodEIPAnnotationKey: pkg.PodEIPAnnotationValue}
-	pod := getPod("10.0.0.1", annotations)
 
 	t.Run("given pod when it is added then it will be on the queue", func(t *testing.T) {
 		controller := newTestController(50, 500)
+		pod := getPod("10.0.0.1", annotations)
 		controller.addFunc(pod)
 
 		assert.Equal(t, 1, controller.queue.Len())
@@ -24,6 +24,7 @@ func TestPodController_addFunc(t *testing.T) {
 
 	t.Run("given multiple different pods when they are added then they will be on the queue", func(t *testing.T) {
 		controller := newTestController(50, 500)
+		pod := getPod("10.0.0.1", annotations)
 		controller.addFunc(addPodName(pod, "test1"))
 		controller.addFunc(addPodName(pod, "test2"))
 		controller.addFunc(addPodName(pod, "test3"))
@@ -37,6 +38,7 @@ func TestPodController_addFunc(t *testing.T) {
 
 	t.Run("given pod when it is added multiple times then it will be on the queue only once", func(t *testing.T) {
 		controller := newTestController(50, 500)
+		pod := getPod("10.0.0.1", annotations)
 		controller.addFunc(pod)
 		controller.addFunc(pod)
 		controller.addFunc(pod)
@@ -50,85 +52,105 @@ func TestPodController_addFunc(t *testing.T) {
 		assert.Equal(t, "default/test", getQueueItem(controller.queue))
 		assert.Equal(t, 0, controller.queue.Len())
 	})
-}
 
-func TestPodController_addAddEvent(t *testing.T) {
-	t.Run("given pod when it does not have ip then false is returned", func(t *testing.T) {
-		annotations := map[string]string{pkg.PodEIPAnnotationKey: pkg.PodEIPAnnotationValue}
+	t.Run("given pod when it does not have ip then it is not added to the queue", func(t *testing.T) {
 		controller := newTestController(5, 500)
-		assert.False(t, controller.addAddEvent(testKey, getPod("", annotations)))
+		pod := getPod("", annotations)
+		controller.addFunc(pod)
+
+		assert.Equal(t, 0, controller.queue.Len())
 	})
 
-	t.Run("given pod when it does not have eip annotation then false is returned", func(t *testing.T) {
+	t.Run("given pod when it does not have eip annotation then it is not added to the queue", func(t *testing.T) {
 		controller := newTestController(5, 500)
-		assert.False(t, controller.addAddEvent(testKey, getPod("10.0.0.1", nil)))
+		pod := getPod("10.0.0.1", nil)
+		controller.addFunc(pod)
+
+		assert.Equal(t, 0, controller.queue.Len())
 	})
 
-	t.Run("given pod when it has eip annotation with non 'auto' value then false is returned", func(t *testing.T) {
-		annotations := map[string]string{pkg.PodEIPAnnotationKey: "test"}
+	t.Run("given pod when it has eip annotation with non 'auto' value then it is not added to the queue", func(t *testing.T) {
 		controller := newTestController(5, 500)
-		assert.False(t, controller.addAddEvent(testKey, getPod("10.0.0.1", annotations)))
+		pod := getPod("10.0.0.1", map[string]string{pkg.PodEIPAnnotationKey: "test"})
+		controller.addFunc(pod)
+
+		assert.Equal(t, 0, controller.queue.Len())
 	})
 
-	t.Run("given pod when it has ip and eip annotation then true is returned", func(t *testing.T) {
-		annotations := map[string]string{pkg.PodEIPAnnotationKey: pkg.PodEIPAnnotationValue}
+	t.Run("given pod when it has ip and eip annotation then it is added to the queue", func(t *testing.T) {
 		controller := newTestController(5, 500)
-		assert.True(t, controller.addAddEvent(testKey, getPod("10.0.0.1", annotations)))
+		pod := getPod("10.0.0.1", annotations)
+		controller.addFunc(pod)
+
+		assert.Equal(t, 1, controller.queue.Len())
+		assert.Equal(t, "default/test", getQueueItem(controller.queue))
+		assert.Equal(t, 0, controller.queue.Len())
 	})
 }
 
 func TestPodController_addUpdateEvent(t *testing.T) {
-	t.Run("given new and old pods when they do not have ip then false is returned", func(t *testing.T) {
-		annotations := map[string]string{pkg.PodEIPAnnotationKey: pkg.PodEIPAnnotationValue}
-		oldPod := getPod("", annotations)
-		newPod := getPod("", annotations)
+	annotations := map[string]string{pkg.PodEIPAnnotationKey: pkg.PodEIPAnnotationValue}
+
+	t.Run("given pod when it has ip and no eip annotation then it is added to the queue", func(t *testing.T) {
 		controller := newTestController(5, 500)
-		assert.False(t, controller.addUpdateEvent(testKey, oldPod, newPod))
+		pod := getPod("10.0.0.1", nil)
+		controller.updateFunc(pod, pod)
+
+		assert.Equal(t, 1, controller.queue.Len())
+		assert.Equal(t, "default/test", getQueueItem(controller.queue))
+		assert.Equal(t, 0, controller.queue.Len())
 	})
 
-	t.Run("given new and old pods when the ip was added then true is returned", func(t *testing.T) {
-		annotations := map[string]string{pkg.PodEIPAnnotationKey: pkg.PodEIPAnnotationValue}
-		oldPod := getPod("", annotations)
-		newPod := getPod("10.0.0.1", annotations)
+	t.Run("given pod when it has ip and eip annotation then it is added to the queue", func(t *testing.T) {
 		controller := newTestController(5, 500)
-		assert.True(t, controller.addUpdateEvent(testKey, oldPod, newPod))
+		pod := getPod("10.0.0.1", annotations)
+		controller.updateFunc(pod, pod)
+
+		assert.Equal(t, 1, controller.queue.Len())
+		assert.Equal(t, "default/test", getQueueItem(controller.queue))
+		assert.Equal(t, 0, controller.queue.Len())
 	})
 
-	t.Run("given new and old pods when the annotation was removed then true is returned", func(t *testing.T) {
-		annotations := map[string]string{pkg.PodEIPAnnotationKey: pkg.PodEIPAnnotationValue}
-		oldPod := getPod("10.0.0.1", annotations)
-		newPod := getPod("10.0.0.1", nil)
+	t.Run("given pod when it does not have ip but has eip annotation then it is not added to the queue", func(t *testing.T) {
 		controller := newTestController(5, 500)
-		assert.True(t, controller.addUpdateEvent(testKey, oldPod, newPod))
-	})
+		pod := getPod("", annotations)
+		controller.updateFunc(pod, pod)
 
-	t.Run("given new and old pods when the annotation was added then true is returned", func(t *testing.T) {
-		annotations := map[string]string{pkg.PodEIPAnnotationKey: pkg.PodEIPAnnotationValue}
-		oldPod := getPod("10.0.0.1", nil)
-		newPod := getPod("10.0.0.1", annotations)
-		controller := newTestController(5, 500)
-		assert.True(t, controller.addUpdateEvent(testKey, oldPod, newPod))
-	})
-
-	t.Run("given new and old pods when the annotation was added but the ip is missing then false is returned", func(t *testing.T) {
-		annotations := map[string]string{pkg.PodEIPAnnotationKey: pkg.PodEIPAnnotationValue}
-		oldPod := getPod("", nil)
-		newPod := getPod("", annotations)
-		controller := newTestController(5, 500)
-		assert.False(t, controller.addUpdateEvent(testKey, oldPod, newPod))
+		assert.Equal(t, 0, controller.queue.Len())
 	})
 }
 
 func TestPodController_addDeleteEvent(t *testing.T) {
-	t.Run("given pod when it has annotation then true is returned", func(t *testing.T) {
-		annotations := map[string]string{pkg.PodEIPAnnotationKey: pkg.PodEIPAnnotationValue}
+	annotations := map[string]string{pkg.PodEIPAnnotationKey: pkg.PodEIPAnnotationValue}
+
+	t.Run("given pod when it has ip and no eip annotation then it is added to the queue", func(t *testing.T) {
 		controller := newTestController(5, 500)
-		assert.True(t, controller.addDeleteEvent(testKey, getPod("", annotations)))
+		pod := getPod("10.0.0.1", nil)
+		controller.deleteFunc(pod)
+
+		assert.Equal(t, 1, controller.queue.Len())
+		assert.Equal(t, "default/test", getQueueItem(controller.queue))
+		assert.Equal(t, 0, controller.queue.Len())
 	})
 
-	t.Run("given pod when it does not have annotation then true is returned", func(t *testing.T) {
+	t.Run("given pod when it has ip and eip annotation then it is added to the queue", func(t *testing.T) {
 		controller := newTestController(5, 500)
-		assert.True(t, controller.addDeleteEvent(testKey, getPod("10.0.0.1", nil)))
+		pod := getPod("10.0.0.1", annotations)
+		controller.deleteFunc(pod)
+
+		assert.Equal(t, 1, controller.queue.Len())
+		assert.Equal(t, "default/test", getQueueItem(controller.queue))
+		assert.Equal(t, 0, controller.queue.Len())
+	})
+
+	t.Run("given pod when it does not have ip but has eip annotation then it is added to the queue", func(t *testing.T) {
+		controller := newTestController(5, 500)
+		pod := getPod("", annotations)
+		controller.deleteFunc(pod)
+
+		assert.Equal(t, 1, controller.queue.Len())
+		assert.Equal(t, "default/test", getQueueItem(controller.queue))
+		assert.Equal(t, 0, controller.queue.Len())
 	})
 }
 
