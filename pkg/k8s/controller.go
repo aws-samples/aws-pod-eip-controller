@@ -19,11 +19,15 @@ import (
 	"k8s.io/client-go/util/workqueue"
 )
 
+type podWorker interface {
+	run(queue workqueue.RateLimitingInterface, indexer cache.KeyGetter)
+}
+
 type PodController struct {
 	logger   *slog.Logger
 	queue    workqueue.RateLimitingInterface
 	informer cache.SharedIndexInformer
-	worker   *podWorker
+	worker   podWorker
 }
 
 type PodControllerConfig struct {
@@ -32,17 +36,18 @@ type PodControllerConfig struct {
 }
 
 func NewPodController(logger *slog.Logger, clientset *kubernetes.Clientset, handler PodHandler, config PodControllerConfig) (*PodController, error) {
-	queue := workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter())
-	informer := newPodInformer(clientset, config.Namespace, config.ResyncPeriod)
-	processor := newPodWorker(logger, queue, informer.GetIndexer(), handler)
-
 	controller := &PodController{
 		logger:   logger.With("component", "controller"),
-		queue:    queue,
-		informer: informer,
-		worker:   processor,
+		queue:    workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
+		informer: newPodInformer(clientset, config.Namespace, config.ResyncPeriod),
+		worker:   newWorker(logger, handler),
 	}
-	if err := controller.addEventHandlers(); err != nil {
+
+	if _, err := controller.informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc:    controller.addFunc,
+		UpdateFunc: controller.updateFunc,
+		DeleteFunc: controller.deleteFunc,
+	}); err != nil {
 		return nil, fmt.Errorf("add event handlers: %w", err)
 	}
 	return controller, nil
@@ -64,54 +69,6 @@ func newPodInformer(clientset *kubernetes.Clientset, namespace string, resyncPer
 	)
 }
 
-func (c *PodController) addEventHandlers() error {
-	_, err := c.informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc: func(obj interface{}) {
-			key, err := cache.MetaNamespaceKeyFunc(obj)
-			if err != nil {
-				c.logger.Error(fmt.Sprintf("handle add event: meta namespace key func: %v", err))
-				return
-			}
-
-			if !c.addAddEvent(key, obj) {
-				return
-			}
-
-			c.logger.Debug(fmt.Sprintf("add event %s added to queue", key))
-			c.queue.AddRateLimited(key)
-		},
-		UpdateFunc: func(oldObj, newObj interface{}) {
-			key, err := cache.MetaNamespaceKeyFunc(newObj)
-			if err != nil {
-				c.logger.Error(fmt.Sprintf("handle update event: meta namespace key func: %v", err))
-				return
-			}
-
-			if !c.addUpdateEvent(key, oldObj, newObj) {
-				return
-			}
-
-			c.logger.Debug(fmt.Sprintf("update event %s added to queue", key))
-			c.queue.AddRateLimited(key)
-		},
-		DeleteFunc: func(obj interface{}) {
-			key, err := cache.DeletionHandlingMetaNamespaceKeyFunc(obj)
-			if err != nil {
-				c.logger.Error(fmt.Sprintf("handle delete event: meta namespace key func: %v", err))
-				return
-			}
-
-			if !c.addDeleteEvent(key, obj) {
-				return
-			}
-
-			c.logger.Debug(fmt.Sprintf("delete event %s added to queue", key))
-			c.queue.AddRateLimited(key)
-		},
-	})
-	return err
-}
-
 func (c *PodController) Run(stopCh <-chan struct{}) {
 	c.logger.Info("starting controller")
 	go func() {
@@ -128,8 +85,53 @@ func (c *PodController) Run(stopCh <-chan struct{}) {
 	}
 	c.logger.Info("cache synced")
 	c.logger.Info("starting controller worker")
-	c.worker.run()
+	c.worker.run(c.queue, c.informer.GetIndexer())
 	c.logger.Info("controller worker stopped")
+}
+
+func (c *PodController) addFunc(obj interface{}) {
+	key, err := cache.MetaNamespaceKeyFunc(obj)
+	if err != nil {
+		c.logger.Error(fmt.Sprintf("handle add event: meta namespace key func: %v", err))
+		return
+	}
+
+	if !c.addAddEvent(key, obj) {
+		return
+	}
+
+	c.logger.Debug(fmt.Sprintf("add event %s added to queue", key))
+	c.queue.Add(key)
+}
+
+func (c *PodController) updateFunc(oldObj, newObj interface{}) {
+	key, err := cache.MetaNamespaceKeyFunc(newObj)
+	if err != nil {
+		c.logger.Error(fmt.Sprintf("handle update event: meta namespace key func: %v", err))
+		return
+	}
+
+	if !c.addUpdateEvent(key, oldObj, newObj) {
+		return
+	}
+
+	c.logger.Debug(fmt.Sprintf("update event %s added to queue", key))
+	c.queue.Add(key)
+}
+
+func (c *PodController) deleteFunc(obj interface{}) {
+	key, err := cache.DeletionHandlingMetaNamespaceKeyFunc(obj)
+	if err != nil {
+		c.logger.Error(fmt.Sprintf("handle delete event: meta namespace key func: %v", err))
+		return
+	}
+
+	if !c.addDeleteEvent(key, obj) {
+		return
+	}
+
+	c.logger.Debug(fmt.Sprintf("delete event %s added to queue", key))
+	c.queue.Add(key)
 }
 
 func (c *PodController) addAddEvent(key string, obj interface{}) bool {
@@ -138,8 +140,7 @@ func (c *PodController) addAddEvent(key string, obj interface{}) bool {
 	// pod has annotation
 	if v, ok := pod.Annotations[pkg.PodEIPAnnotationKey]; ok && v == pkg.PodEIPAnnotationValue {
 		// and has IP assigned
-		ip := pod.Status.PodIP
-		if ip != "" {
+		if ip := pod.Status.PodIP; ip != "" {
 			c.logger.Info(fmt.Sprintf("add add event %s ip is set %s", key, ip))
 			return true
 		}
@@ -149,9 +150,7 @@ func (c *PodController) addAddEvent(key string, obj interface{}) bool {
 }
 
 func (c *PodController) addUpdateEvent(key string, oldObj, newObj interface{}) bool {
-	newPod := c.toPod(key, newObj)
-
-	if newPod.Status.PodIP == "" {
+	if c.toPod(key, newObj).Status.PodIP == "" {
 		c.logger.Info(fmt.Sprintf("add update event %s pod does not have ip", key))
 		return false
 	}

@@ -5,8 +5,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"k8s.io/api/core/v1"
-	"k8s.io/client-go/tools/cache"
-	"k8s.io/client-go/util/workqueue"
 	"testing"
 	"time"
 )
@@ -14,9 +12,10 @@ import (
 func TestPodWorker_processNextItem(t *testing.T) {
 	t.Run("given pod worker when queue is shut down then no item is processed and false is returned", func(t *testing.T) {
 		// indexer and handler are not set, they should not be called on queue shutdown
-		worker := newTestPodWorker(nil, nil)
-		worker.queue.ShutDown()
-		assert.False(t, worker.processNextItem())
+		worker := newTestWorker(nil)
+		queue := newTestQueue(5, 500)
+		queue.ShutDown()
+		assert.False(t, worker.processNextItem(queue, nil))
 	})
 
 	t.Run("given pod worker when handler returns error then queue is retried only max times", func(t *testing.T) {
@@ -25,27 +24,25 @@ func TestPodWorker_processNextItem(t *testing.T) {
 		handler := new(HandlerMock)
 		handler.On("Delete", testKey).Return(errors.New("test delete failure"))
 
-		worker := newTestPodWorker(indexer, handler)
-		worker.queue.Add(testKey)
+		worker := newTestWorker(handler)
+		queue := newTestQueue(5, 500)
+		queue.Add(testKey)
 
 		// run process next item max retries and check if queue is empty after (item is forgotten and removed)
 		for i := 0; i <= maxQueueRetries; i++ {
-			assert.True(t, worker.processNextItem())
+			assert.True(t, worker.processNextItem(queue, indexer))
 		}
 
 		// wait longer than rate limiter for the queue and check if the item has been removed
 		time.Sleep(600 * time.Millisecond)
-		assert.Equal(t, 0, worker.queue.Len())
+		assert.Equal(t, 0, queue.Len())
 	})
 }
 
-func newTestPodWorker(indexer cache.KeyGetter, handler PodHandler) *podWorker {
-	queue := workqueue.NewRateLimitingQueue(
-		workqueue.NewMaxOfRateLimiter(
-			// reduce failure limiter to max 0.5 second for tests
-			workqueue.NewItemExponentialFailureRateLimiter(5*time.Millisecond, 500*time.Millisecond),
-		))
-	return newPodWorker(noOpLogger, queue, indexer, handler)
+// --- helpers ---
+
+func newTestWorker(handler PodHandler) *worker {
+	return newWorker(noOpLogger, handler)
 }
 
 // --- mocks ---
