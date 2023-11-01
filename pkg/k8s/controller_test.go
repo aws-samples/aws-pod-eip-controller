@@ -41,7 +41,6 @@ func TestPodController_addFunc(t *testing.T) {
 		controller.addFunc(pod)
 		controller.addFunc(pod)
 
-		// we are using add rate limited, keys should be available only after 'base' time
 		assert.Equal(t, 1, controller.queue.Len())
 		assert.Equal(t, "default/test", getQueueItem(controller.queue))
 		assert.Equal(t, 0, controller.queue.Len())
