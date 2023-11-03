@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: MIT-0
+
 package k8s
 
 import (
@@ -34,6 +37,41 @@ func TestPodController_addFunc(t *testing.T) {
 		assert.Equal(t, "default/test2", getQueueItem(controller.queue))
 		assert.Equal(t, "default/test3", getQueueItem(controller.queue))
 		assert.Equal(t, 0, controller.queue.Len())
+	})
+
+	t.Run("given pod when it is added multiple times then they it will appear on the queue only once", func(t *testing.T) {
+		controller := newTestController(50, 500)
+		pod := getPod("10.0.0.1", annotations)
+		controller.addFunc(pod)
+		controller.addFunc(pod)
+		controller.addFunc(pod)
+
+		// same pod, will be on the queue only once
+		assert.Equal(t, 1, controller.queue.Len())
+		item1, _ := controller.queue.Get()
+		assert.Equal(t, 0, controller.queue.Len())
+		controller.queue.Forget(item1)
+		controller.queue.Done(item1)
+		assert.Equal(t, 0, controller.queue.Len())
+	})
+
+	t.Run("given pod when it is added while first is being processed then they it will appear on the queue after done is called", func(t *testing.T) {
+		controller := newTestController(50, 500)
+		pod := getPod("10.0.0.1", annotations)
+		controller.addFunc(pod)
+
+		assert.Equal(t, 1, controller.queue.Len())
+		item1, _ := controller.queue.Get()
+
+		// adding same pod, but first one has not been marked as done
+		controller.addFunc(pod)
+		assert.Equal(t, 0, controller.queue.Len())
+
+		// finished work with first one
+		controller.queue.Forget(item1)
+		controller.queue.Done(item1)
+
+		assert.Equal(t, 1, controller.queue.Len())
 	})
 
 	t.Run("given pod when it is added multiple times then it will be on the queue only once", func(t *testing.T) {

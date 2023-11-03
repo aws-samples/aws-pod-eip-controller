@@ -1,8 +1,10 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: MIT-0
+
 package k8s
 
 import (
 	"errors"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"k8s.io/api/core/v1"
 	"testing"
@@ -10,32 +12,35 @@ import (
 )
 
 func TestPodWorker_processNextItem(t *testing.T) {
-	t.Run("given pod worker when queue is shut down then no item is processed and false is returned", func(t *testing.T) {
+	t.Run("given pod worker when queue is shut down then no item is processed", func(t *testing.T) {
 		// indexer and handler are not set, they should not be called on queue shutdown
 		worker := newTestWorker(nil)
 		queue := newTestQueue(5, 500)
 		queue.ShutDown()
-		assert.False(t, worker.processNextItem(queue, nil))
+		worker.run(queue, nil)
+		// test is not blocking and continues
 	})
 
 	t.Run("given pod worker when handler returns error then queue is retried only max times", func(t *testing.T) {
 		indexer := new(KeyGetterMock)
-		indexer.On("GetByKey", testKey).Return(nil, false, nil)
+		// first get plus retries
+		indexer.On("GetByKey", testKey).Return(nil, false, nil).Times(1 + maxQueueRetries)
 		handler := new(HandlerMock)
-		handler.On("Delete", testKey).Return(errors.New("test delete failure"))
+		// first delete plus retries
+		handler.On("Delete", testKey).Return(errors.New("test delete failure")).Times(1 + maxQueueRetries)
 
 		worker := newTestWorker(handler)
-		queue := newTestQueue(5, 500)
+		queue := newTestQueue(5, 100)
 		queue.Add(testKey)
 
-		// run process next item max retries and check if queue is empty after (item is forgotten and removed)
-		for i := 0; i <= maxQueueRetries; i++ {
-			assert.True(t, worker.processNextItem(queue, indexer))
-		}
+		go func() {
+			// wait longer than rate limiter after that shut down the queue so run can exit
+			time.Sleep(300 * time.Millisecond)
+			queue.ShutDown()
+		}()
 
-		// wait longer than rate limiter for the queue and check if the item has been removed
-		time.Sleep(600 * time.Millisecond)
-		assert.Equal(t, 0, queue.Len())
+		worker.run(queue, indexer)
+		mock.AssertExpectationsForObjects(t)
 	})
 }
 

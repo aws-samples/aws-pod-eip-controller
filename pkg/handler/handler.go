@@ -16,11 +16,6 @@ import (
 	clientv1 "k8s.io/client-go/kubernetes/typed/core/v1"
 )
 
-const (
-	// TODO - remove buffer, we should have only one pod in the channel so we always get up to date pod from the store
-	podChannelBuff = 10
-)
-
 type ENIClient interface {
 	AssociateAddress(podKey, podIP string) (string, error)
 	DisassociateAddress(podKey string) error
@@ -63,20 +58,16 @@ func NewPodEvent(key string, pod v1.Pod) PodEvent {
 
 type Handler struct {
 	logger        *slog.Logger
-	mux           *sync.RWMutex
 	coreClient    clientv1.CoreV1Interface
 	eniClient     ENIClient
-	podEvents     map[string]chan<- PodEvent
 	cacheEventMap sync.Map
 }
 
 func NewHandler(logger *slog.Logger, coreClient clientv1.CoreV1Interface, eniClient ENIClient) *Handler {
 	h := &Handler{
 		logger:        logger.With("component", "handler"),
-		mux:           &sync.RWMutex{},
 		coreClient:    coreClient,
 		eniClient:     eniClient,
-		podEvents:     make(map[string]chan<- PodEvent),
 		cacheEventMap: sync.Map{},
 	}
 	return h
@@ -88,77 +79,27 @@ func (h *Handler) AddOrUpdate(key string, pod v1.Pod) error {
 		return nil
 	}
 
-	defer func() {
-		if r := recover(); r != nil {
-			// recover just in case channel has been already closed. this should not happen though, events are
-			// received from the queue in sequence, if the add/update is blocked (channel is full), we should not
-			// be able to receive delete, hence close channel
-			h.logger.Error(fmt.Sprintf("recovereed add/update %s key: %v", key, r))
-		}
-	}()
-
+	event := NewPodEvent(key, pod)
+	if h.sameStatusInCache(event.Key, event) {
+		h.logger.Debug(fmt.Sprintf("pod %s has same status in cache, skipping", event.Key))
+		return nil
+	}
 	h.logger.Info(fmt.Sprintf("received pod add/update %s phase %s IP %s", key, pod.Status.Phase, pod.Status.PodIP))
-	h.getPodChannel(key) <- NewPodEvent(key, pod)
+	if err := h.addOrUpdateEvent(event); err != nil {
+		return err
+	}
+
+	h.cacheEventMap.Store(event.Key, event)
 	return nil
 }
 
 func (h *Handler) Delete(key string) error {
-	h.logger.Info(fmt.Sprintf("received pod delete %s, deleting channel", key))
-	h.deletePodChannel(key)
+	h.logger.Info(fmt.Sprintf("received pod delete %s", key))
+	if err := h.eniClient.DisassociateAddress(key); err != nil {
+		return err
+	}
 	h.cacheEventMap.Delete(key)
 	return nil
-}
-
-func (h *Handler) getPodChannel(key string) chan<- PodEvent {
-	h.mux.Lock()
-	defer h.mux.Unlock()
-	if c, ok := h.podEvents[key]; ok {
-		h.logger.Debug(fmt.Sprintf("using existing channel for %s", key))
-		return c
-	}
-	h.podEvents[key] = h.newPodChannel(key)
-	h.logger.Debug(fmt.Sprintf("created new channel for %s", key))
-	return h.podEvents[key]
-}
-
-func (h *Handler) deletePodChannel(key string) {
-	h.mux.Lock()
-	defer h.mux.Unlock()
-	if c, ok := h.podEvents[key]; ok {
-		close(c)
-		h.logger.Debug(fmt.Sprintf("%s channel closed", key))
-		delete(h.podEvents, key)
-		h.logger.Debug(fmt.Sprintf("key %s deleted from pod events map", key))
-		return
-	}
-	h.logger.Info(fmt.Sprintf("channel for %s not found", key))
-}
-
-// newPodChannel creates new channel for a specific pod and return it
-func (h *Handler) newPodChannel(key string) chan<- PodEvent {
-	events := make(chan PodEvent, podChannelBuff)
-	go func() {
-		for e := range events {
-			h.logger.Info(fmt.Sprintf("got pod event %s IP %s", e.Key, e.IP))
-			if h.sameStatusInCache(e.Key, e) {
-				h.logger.Debug(fmt.Sprintf("pod %s has same status in cache, skipping", e.Key))
-				continue
-			}
-			if err := h.addOrUpdateEvent(e); err != nil {
-				h.logger.Error(err.Error())
-			} else {
-				// update the cache status
-				h.cacheEventMap.Store(e.Key, e)
-			}
-		}
-		// channel closed, pod has been deleted
-		h.logger.Debug(fmt.Sprintf("finished processing %s events", key))
-		if err := h.eniClient.DisassociateAddress(key); err != nil {
-			h.logger.Error(fmt.Sprintf("disassociate address %s: %v", key, err))
-			return
-		}
-	}()
-	return events
 }
 
 // sameStatusInCache checks if the pod event is the same as the one in cache

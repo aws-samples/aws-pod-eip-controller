@@ -32,41 +32,40 @@ func newWorker(logger *slog.Logger, handler PodHandler) *worker {
 	}
 }
 
+// run starts processing items from the queue, this call is blocking until queue is shut down
 func (w *worker) run(queue workqueue.RateLimitingInterface, indexer cache.KeyGetter) {
-	for w.processNextItem(queue, indexer) {
-	}
-}
-
-func (w *worker) processNextItem(queue workqueue.RateLimitingInterface, indexer cache.KeyGetter) bool {
-	// rate limiting queue life cycle
-	// https://docs.bitnami.com/tutorials/_next/static/images/key-lifecicle-workqueue-4e3c30ed8a09c28cceb2247fb776b548.png.webp
-	key, shutdown := queue.Get()
-	if shutdown {
-		w.logger.Info("received queue shut down")
-		// TODO - send shutdown signal to the handler
-		return false
-	}
-
-	// done has to be called when we finished processing the item
-	defer queue.Done(key)
-
-	retries := queue.NumRequeues(key)
-	if err := w.processItem(indexer, key.(string)); err != nil {
-		w.logger.Error(fmt.Sprintf("process item: %v", err))
-		if retries < maxQueueRetries {
-			// calling done in defer, but not forget, we still can retry
-			w.logger.Error(fmt.Sprintf("process item retry %d out of %d, retrying: %v", retries, maxQueueRetries, err))
-			queue.AddRateLimited(key)
-			return true
+	for {
+		item, shutdown := queue.Get()
+		if shutdown {
+			w.logger.Info("received queue shut down")
+			// TODO - send shutdown signal to the handler
+			// or add wait group, so we always wait till all items have been processed
+			return
 		}
-		w.logger.Error(fmt.Sprintf("process item retries exceeded, retried %d out of %d: %v", retries, maxQueueRetries, err))
-	}
 
-	// if no error occurs, or number of retries exceeded we forget this item, so it does not have any delay when another change happens
-	queue.Forget(key)
-	return true
+		go func(key interface{}) {
+			// done has to be called when we finished processing the item
+			defer queue.Done(key)
+
+			retries := queue.NumRequeues(key)
+			if err := w.processItem(indexer, key.(string)); err != nil {
+				w.logger.Error(fmt.Sprintf("process item: %v", err))
+				if retries < maxQueueRetries {
+					// calling done in defer, but not forget, we still can retry
+					w.logger.Error(fmt.Sprintf("process item retry %d out of %d, retrying: %v", retries, maxQueueRetries, err))
+					queue.AddRateLimited(key)
+					return
+				}
+				w.logger.Error(fmt.Sprintf("process item retries exceeded, retried %d out of %d: %v", retries, maxQueueRetries, err))
+			}
+
+			// if no error occurs, or number of retries exceeded we forget this item, so it does not have any delay when another change happens
+			queue.Forget(key)
+		}(item)
+	}
 }
 
+// processItem retrieves object by key from indexer and sends it to handler for processing
 func (w *worker) processItem(indexer cache.KeyGetter, key string) error {
 	var pod v1.Pod
 	obj, exists, err := indexer.GetByKey(key)
