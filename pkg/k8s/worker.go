@@ -9,6 +9,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 	"log/slog"
+	"sync"
 )
 
 const maxQueueRetries = 3
@@ -34,18 +35,22 @@ func newWorker(logger *slog.Logger, handler PodHandler) *worker {
 
 // run starts processing items from the queue, this call is blocking until queue is shut down
 func (w *worker) run(queue workqueue.RateLimitingInterface, indexer cache.KeyGetter) {
+	var wg sync.WaitGroup
 	for {
 		item, shutdown := queue.Get()
 		if shutdown {
 			w.logger.Info("received queue shut down")
-			// TODO - send shutdown signal to the handler
-			// or add wait group, so we always wait till all items have been processed
+			w.logger.Info("waiting for items to be processed")
+			wg.Wait()
+			w.logger.Info("all items processed")
 			return
 		}
 
+		wg.Add(1)
 		go func(key interface{}) {
 			// done has to be called when we finished processing the item
 			defer queue.Done(key)
+			defer wg.Done()
 
 			retries := queue.NumRequeues(key)
 			if err := w.processItem(indexer, key.(string)); err != nil {
