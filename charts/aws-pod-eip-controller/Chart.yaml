@@ -1,0 +1,7 @@
+apiVersion: v2
+home: https://github.com/aws-samples/aws-pod-eip-controller
+version: 0.1.0
+name: aws-pod-eip-controller
+description: kubernetes aws-pod-eip-controller
+sources:
+  - https://github.com/aws-samples/aws-pod-eip-controller/charts
