@@ -4,143 +4,120 @@
 package main
 
 import (
-	"context"
-	"flag"
+	"fmt"
+	"log/slog"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
+	"github.com/aws-samples/aws-pod-eip-controller/pkg"
+	"github.com/aws-samples/aws-pod-eip-controller/pkg/aws"
 	"github.com/aws-samples/aws-pod-eip-controller/pkg/handler"
-	"github.com/aws-samples/aws-pod-eip-controller/pkg/informer"
-	"github.com/aws-samples/aws-pod-eip-controller/pkg/recycle"
-	"github.com/aws-samples/aws-pod-eip-controller/pkg/service"
-	"github.com/google/uuid"
-	"github.com/sirupsen/logrus"
-	"gopkg.in/yaml.v2"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/dynamic"
+	"github.com/aws-samples/aws-pod-eip-controller/pkg/k8s"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
-	"k8s.io/client-go/tools/leaderelection"
-	"k8s.io/client-go/tools/leaderelection/resourcelock"
 )
 
-type Config struct {
-	Log struct {
-		Level  string `yaml:"level"`
-		Format string `yaml:"format"`
-	} `yaml:"log"`
-	ClusterName    string `yaml:"clusterName"`
-	ChannelSize    int    `yaml:"channelSize"`
-	VpcID          string `yaml:"vpcID"`
-	Region         string `yaml:"region"`
-	KubeConfigPath string `yaml:"kubeConfigPath"`
-	WatchNamespace string `yaml:"watchNamespace"`
-	ResyncPeriod   int    `yaml:"resyncPeriod"`
-	RecycleOption  struct {
-		Enable bool `yaml:"enable"`
-		Period int  `yaml:"period"`
-	} `yaml:"recycleOption"`
+func main() {
+	flags := pkg.ParseFlags()
+	logger := pkg.NewLogger(flags.SlogLevel())
+	logger.Info(fmt.Sprintf("starting controller with flags: %+v", flags))
+
+	flags, err := setVpcIdAndRegion(logger, flags)
+	if err != nil {
+		logger.Error(fmt.Sprintf("set vpc id and region: %v", err))
+		os.Exit(1)
+	}
+
+	restConfig, err := getRestConfig(logger, flags.Kubeconfig)
+	if err != nil {
+		logger.Error(fmt.Sprintf("get rest config: %v", err))
+		os.Exit(1)
+	}
+
+	clientset, err := kubernetes.NewForConfig(restConfig)
+	if err != nil {
+		logger.Error(fmt.Sprintf("new clientset: %v", err))
+		os.Exit(1)
+	}
+
+	ec2Client, err := aws.NewEC2Client(logger, flags.Region, flags.VpcID, flags.ClusterName)
+	if err != nil {
+		logger.Error(fmt.Sprintf("new ec2 client: %v", err))
+		os.Exit(1)
+	}
+
+	if err := run(logger, clientset, ec2Client, k8s.PodControllerConfig{
+		Namespace:    flags.WatchNamespace,
+		ResyncPeriod: time.Duration(flags.ResyncPeriod) * time.Second,
+	}); err != nil {
+		logger.Error(fmt.Sprintf("controller run: %v", err))
+		os.Exit(1)
+	}
 }
 
-func main() {
-	// config parse
-	configFileName := flag.String("f", "config.yaml", "config file name")
-	flag.Parse()
-	config := Config{}
-	configYaml, err := os.ReadFile(*configFileName)
+func run(logger *slog.Logger, clientset *kubernetes.Clientset, eniClient handler.ENIClient, config k8s.PodControllerConfig) error {
+	podHandler := handler.NewHandler(logger, clientset.CoreV1(), eniClient)
+	podController, err := k8s.NewPodController(logger, clientset, podHandler, config)
 	if err != nil {
-		panic(err)
-	}
-	err = yaml.Unmarshal(configYaml, &config)
-	if err != nil {
-		panic(err)
-	}
-	if config.ChannelSize <= 0 || config.ChannelSize > 100 {
-		config.ChannelSize = 20
-	}
-	vpcID, region, err := service.GetVpcIDAndRegion(config.VpcID, config.Region)
-	if err != nil {
-		logrus.Fatalln("get vpc-id and region fail", err)
-	}
-	// logrus setting
-	level, err := logrus.ParseLevel(config.Log.Level)
-	if err != nil {
-		level = logrus.InfoLevel
-	}
-	logrus.SetLevel(level)
-	if config.Log.Format == "json" {
-		logrus.SetFormatter(&logrus.JSONFormatter{})
-	} else {
-		logrus.SetFormatter(&logrus.TextFormatter{})
-	}
-	logrus.SetOutput(os.Stdout)
-	logrus.Debugf("%+v", config)
-
-	// create cluster client
-	var clusterConfig *rest.Config
-	if config.KubeConfigPath != "" {
-		clusterConfig, err = clientcmd.BuildConfigFromFlags("", config.KubeConfigPath)
-	} else {
-		clusterConfig, err = rest.InClusterConfig()
-	}
-	if err != nil {
-		logrus.Fatalln(err)
-	}
-	clusterClient, err := dynamic.NewForConfig(clusterConfig)
-	if err != nil {
-		logrus.Fatalln(err)
+		return fmt.Errorf("new pod informer: %v", err)
 	}
 
-	// acquired lease lock
-	client := kubernetes.NewForConfigOrDie(clusterConfig)
-	lock := &resourcelock.LeaseLock{
-		LeaseMeta: metav1.ObjectMeta{
-			Name:      "aws-pod-eip-controller-lock",
-			Namespace: "kube-system",
-		},
-		Client: client.CoordinationV1(),
-		LockConfig: resourcelock.ResourceLockConfig{
-			Identity: uuid.New().String(),
-		},
+	podController.Run(getStopCh(logger))
+	logger.Info("controller stopped")
+	return nil
+}
+
+func getStopCh(logger *slog.Logger) <-chan struct{} {
+	stopCh := make(chan struct{})
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		logger.Debug("listening for SIGINT and SIGTERM")
+		s := <-sigCh
+		logger.Info(fmt.Sprintf("received %s signal, stopping", s))
+		close(stopCh)
+	}()
+	return stopCh
+}
+
+// setVpcIdAndRegion checks if the vpc id and region are set in flags, if not, it will retrieve it from imds service
+func setVpcIdAndRegion(logger *slog.Logger, flags pkg.Flags) (pkg.Flags, error) {
+	if flags.VpcID == "" || flags.Region == "" {
+		logger.Info("vpc id and/or region is not set, starting new imds service")
+		imds, err := aws.NewIMDS()
+		if err != nil {
+			return flags, err
+		}
+		if flags.VpcID == "" {
+			logger.Info("vpc id is not set, loading from imds service")
+			vpcId, err := imds.GetVpcID()
+			if err != nil {
+				return flags, err
+			}
+			logger.Info(fmt.Sprintf("vpc id set to %s", vpcId))
+			flags.VpcID = vpcId
+		}
+		if flags.Region == "" {
+			logger.Info("region is not set, loading from imds service")
+			region, err := imds.GetRegion()
+			if err != nil {
+				return flags, err
+			}
+			logger.Info(fmt.Sprintf("region set to %s", region))
+			flags.Region = region
+		}
 	}
+	return flags, nil
+}
 
-	leaderelection.RunOrDie(context.TODO(), leaderelection.LeaderElectionConfig{
-		Lock:            lock,
-		ReleaseOnCancel: true,
-		LeaseDuration:   30 * time.Second,
-		RenewDeadline:   10 * time.Second,
-		RetryPeriod:     5 * time.Second,
-		Callbacks: leaderelection.LeaderCallbacks{
-			OnStartedLeading: func(ctx context.Context) {
-				logrus.Infof("start leading")
-				// init handler
-				handler, err := handler.NewHandler(int32(config.ChannelSize), vpcID, region, config.ClusterName, client)
-				if err != nil {
-					logrus.Fatalln(err)
-				}
-
-				// create informer
-				pecInformer := informer.NewPECInformer(clusterClient, config.ResyncPeriod, config.WatchNamespace, handler)
-				go pecInformer.Run(ctx.Done())
-
-				// recycle elatic ip
-				if config.RecycleOption.Enable {
-					recycle, err := recycle.NewRecycle(clusterClient, config.ClusterName, config.RecycleOption.Period, vpcID, region)
-					if err != nil {
-						logrus.Fatalln(err)
-					}
-					go recycle.Run()
-				}
-			},
-			OnStoppedLeading: func() {
-				logrus.Infof("stop leading")
-				os.Exit(0)
-			},
-			OnNewLeader: func(identity string) {
-				logrus.Infof("new leader: %s", identity)
-			},
-		},
-	})
-
+func getRestConfig(logger *slog.Logger, kubeconfig string) (*rest.Config, error) {
+	if kubeconfig == "" {
+		logger.Info("kubeconfig is not set, creating in cluster config")
+		return rest.InClusterConfig()
+	}
+	logger.Info("kubeconfig is set, creating default config")
+	return clientcmd.BuildConfigFromFlags("", kubeconfig)
 }
