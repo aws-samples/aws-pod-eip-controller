@@ -1,4 +1,5 @@
 image: ""
+serviceAccountName: ""
 logLevel: DEBUG
 clusterName: ""
 vpcID: ""

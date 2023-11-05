@@ -23,7 +23,7 @@ spec:
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/version: {{ .Chart.Version }}
     spec:
-      serviceAccountName: {{ .Release.Name }}
+      serviceAccountName: {{ .Values.serviceAccountName }}
       containers:
       - name: {{ .Chart.Name }}
         image: {{ .Values.image }}
@@ -40,7 +40,7 @@ spec:
           - name: PEC_WATCH_NAMESPACE
             value: {{ .Values.watchNamespace }}
           - name: PEC_RESYNC_PERIOD
-            value: {{ .Values.resyncPeriod }}
+            value: {{ quote .Values.resyncPeriod }}
         resources:
           limits:
             cpu: 150m
