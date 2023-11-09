@@ -3,7 +3,7 @@ module github.com/aws-samples/aws-pod-eip-controller
 go 1.21
 
 require (
-	github.com/aws/aws-sdk-go-v2 v1.22.1
+	github.com/aws/aws-sdk-go-v2 v1.22.2
 	github.com/aws/aws-sdk-go-v2/config v1.22.0
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.14.2
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.130.0
