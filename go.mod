@@ -9,7 +9,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.132.0
 	github.com/stretchr/testify v1.8.4
 	k8s.io/api v0.28.3
-	k8s.io/apimachinery v0.28.3
+	k8s.io/apimachinery v0.29.0
 	k8s.io/client-go v0.28.3
 )
 
