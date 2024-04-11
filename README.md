@@ -19,6 +19,10 @@ The solution processes EIPs for Pods through the following steps:
 |----------------------------------------------------------------|--------|----------|----------|
 | aws-samples.github.com/aws-pod-eip-controller-type             | string | auto     | pod      |
 | aws-samples.github.com/aws-pod-eip-controller-public-ipv4-pool | string |          | pod      |
+| aws-samples.github.com/aws-pod-eip-controller-type             | string | auto     | pod      |
+| aws-samples.github.com/aws-pod-eip-controller-mode             | string | nil      | pod      |
+| aws-samples.github.com/aws-pod-eip-controller-reclaim          | string | nil      | pod      |
+
 
 ## Config
 

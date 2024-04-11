@@ -19,8 +19,10 @@ import (
 
 type ENIClient interface {
 	AssociateAddress(podKey, podIP string, addressPoolId *string) (string, error)
+	AssociateFixedAddress(podKey, podIP string) (string, error)
 	DisassociateAddress(podKey string) error
 	HasAssociatedAddress(podIP string) (bool, error)
+	HasAssociatedPodAddress(podIP string) (bool, error)
 }
 
 type PodEvent struct {
@@ -34,10 +36,31 @@ type PodEvent struct {
 }
 
 func (p PodEvent) HasEIPAnnotation() bool {
+	// pod annotations["aws-samples.github.com/aws-pod-eip-controller-type"]: "auto"
 	if v, ok := p.Annotations[pkg.PodEIPAnnotationKey]; ok {
 		return v == pkg.PodEIPAnnotationValue
 	}
 	return false
+}
+
+func (p PodEvent) IsEIPReclaimDisabled() bool {
+	// pod annotations["aws-samples.github.com/aws-pod-eip-controller-reclaim"]: "false"
+	if v, ok := p.Annotations[pkg.PodEIPReclaimAnnotationKey]; ok {
+		return v == pkg.PodEIPReclaimAnnotationVal
+	}
+	// if pod eip mode in fixed mode, disable EIP reclaim
+	if v, ok := p.Annotations[pkg.PodEIPModeAnnotationKey]; ok {
+		return v == pkg.PodEIPModeAnnotationVal
+	}
+	return false
+}
+
+func (p PodEvent) GetEIPMode() string {
+	// pod annotations["aws-samples.github.com/aws-pod-eip-controller-mode"]: "fixed"
+	if v, ok := p.Annotations[pkg.PodEIPModeAnnotationKey]; ok {
+		return v
+	}
+	return ""
 }
 
 func (p PodEvent) GetPublicIPLabel() (string, bool) {
@@ -105,9 +128,17 @@ func (h *Handler) AddOrUpdate(key string, pod v1.Pod) error {
 
 func (h *Handler) Delete(key string) error {
 	h.logger.Info(fmt.Sprintf("received pod delete %s", key))
-	if err := h.eniClient.DisassociateAddress(key); err != nil {
-		return err
+
+	if h.isEnableEIPReclaim(key) {
+		h.logger.Info("pod eip reclaim is set to true, reclaiming eip")
+		// reclaim pod eip
+		if err := h.eniClient.DisassociateAddress(key); err != nil {
+			return err
+		}
+	} else {
+		h.logger.Info("pod eip reclaim is set to false, skipping reclaiming eip")
 	}
+
 	h.cacheEventMap.Delete(key)
 	return nil
 }
@@ -129,6 +160,18 @@ func (h *Handler) sameStatusInCache(key string, event PodEvent) bool {
 		}
 	}
 	return false
+}
+
+// isEnableEIPReclaim checks if the pod annotation has enabled eip reclaim policy
+func (h *Handler) isEnableEIPReclaim(key string) bool {
+	if v, ok := h.cacheEventMap.Load(key); ok {
+		// annotation is not the same, but both are not set, no need to process
+		if v.(PodEvent).IsEIPReclaimDisabled() {
+			return false
+		}
+	}
+	// default enable EIP reclaim
+	return true
 }
 
 func (h *Handler) addOrUpdateEvent(event PodEvent) error {
@@ -155,9 +198,22 @@ func (h *Handler) addOrUpdateEvent(event PodEvent) error {
 	}
 
 	// pod has EIP annotation
-	publicIP, err := h.eniClient.AssociateAddress(event.Key, event.IP, event.GetAddressPoolId())
-	if err != nil {
-		return fmt.Errorf("associate address %s: %v", event.Key, err)
+	var publicIP string
+
+	// check if the pod has fixed EIP mode, if yes, associate fixed address
+	// otherwise, associate random address
+	eipMode := event.GetEIPMode()
+	switch eipMode {
+	case pkg.PodEIPModeAnnotationVal:
+		publicIP, err = h.eniClient.AssociateFixedAddress(event.Key, event.IP)
+		if err != nil {
+			return fmt.Errorf("associate fixed address %s: %v", event.Key, err)
+		}
+	default:
+		publicIP, err = h.eniClient.AssociateAddress(event.Key, event.IP, event.GetAddressPoolId())
+		if err != nil {
+			return fmt.Errorf("associate address %s: %v", event.Key, err)
+		}
 	}
 
 	// pod has already public IP label, check if the public IP matches

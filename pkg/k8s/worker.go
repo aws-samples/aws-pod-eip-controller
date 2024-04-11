@@ -5,11 +5,12 @@ package k8s
 
 import (
 	"fmt"
-	"k8s.io/api/core/v1"
-	"k8s.io/client-go/tools/cache"
-	"k8s.io/client-go/util/workqueue"
 	"log/slog"
 	"sync"
+
+	v1 "k8s.io/api/core/v1"
+	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/util/workqueue"
 )
 
 const maxQueueRetries = 3

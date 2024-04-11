@@ -6,13 +6,14 @@ package aws
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"time"
+
 	"github.com/aws-samples/aws-pod-eip-controller/pkg"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
-	"log/slog"
-	"time"
 )
 
 type EC2Client struct {
@@ -55,6 +56,22 @@ func (c EC2Client) AssociateAddress(podKey, podIP string, addressPoolId *string)
 	return c.allocatedAndAssociateAddress(podKey, podIP, ni.id, addressPoolId)
 }
 
+func (c EC2Client) AssociateFixedAddress(podKey, podIP string) (string, error) {
+	ni, err := c.getNetworkInterface(podIP)
+	if err != nil {
+		return "", err
+	}
+	addrs, err := c.describePodAddresses(podKey)
+	if err != nil {
+		return "", err
+	}
+	if len(addrs) != 0 {
+		c.logger.Info(fmt.Sprintf("pod ip %s is already associated with %s ip, try re-associate", podIP, addrs[0].publicIP))
+		return c.reAssociateAddress(podKey, podIP, ni.id, &addrs[0])
+	}
+	return c.allocatedAndAssociateAddress(podKey, podIP, ni.id)
+}
+
 func (c EC2Client) HasAssociatedAddress(podIP string) (bool, error) {
 	ni, err := c.getNetworkInterface(podIP)
 	if err != nil {
@@ -65,6 +82,18 @@ func (c EC2Client) HasAssociatedAddress(podIP string) (bool, error) {
 		return false, err
 	}
 	return len(addrs) != 0, nil
+}
+
+func (c EC2Client) HasAssociatedPodAddress(podKey string) (bool, error) {
+	addrs, err := c.describePodAddresses(podKey)
+	if err != nil {
+		return false, err
+	}
+	if len(addrs) == 0 {
+		c.logger.Info(fmt.Sprintf("no address found for %s pod", podKey))
+		return false, nil
+	}
+	return true, nil
 }
 
 func (c EC2Client) DisassociateAddress(podKey string) error {
@@ -227,6 +256,22 @@ func (c EC2Client) allocatedAndAssociateAddress(podKey, privateIP, eniID string,
 			aws.ToString(allocatedResult.AllocationId), eniID, privateIP)
 	}
 	return aws.ToString(allocatedResult.PublicIp), nil
+}
+
+func (c EC2Client) reAssociateAddress(podKey, privateIP, eniID string, addr *address) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	//aws ec2 associate-address --allocation-id eipalloc-64d5890a --network-interface-id eni-1a2b3c4d --private-ip-address 10.0.0.85
+	if _, err := c.client.AssociateAddress(ctx, &ec2.AssociateAddressInput{
+		AllocationId:       &addr.allocationID,
+		NetworkInterfaceId: aws.String(eniID),
+		PrivateIpAddress:   aws.String(privateIP),
+	}); err != nil {
+		return "", fmt.Errorf("associate address allocation-id %s network-interface-id %s private-ip-address %s",
+			aws.ToString(&addr.allocationID), eniID, privateIP)
+	}
+	return aws.ToString(&addr.publicIP), nil
 }
 
 func (c EC2Client) disassociateAndReleaseAddress(associationID, allocationID string) error {

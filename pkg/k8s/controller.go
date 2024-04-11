@@ -147,6 +147,7 @@ func (c *PodController) toPod(key string, obj interface{}) pod {
 
 	v1Pod := *obj.(*v1.Pod)
 	var hasEIPAnnotation bool
+
 	if v, ok := v1Pod.Annotations[pkg.PodEIPAnnotationKey]; ok && v == pkg.PodEIPAnnotationValue {
 		hasEIPAnnotation = true
 	}

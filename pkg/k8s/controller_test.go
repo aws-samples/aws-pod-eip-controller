@@ -4,16 +4,19 @@
 package k8s
 
 import (
+	"testing"
+
 	"github.com/aws-samples/aws-pod-eip-controller/pkg"
 	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/util/workqueue"
-	"testing"
 )
 
 func TestPodController_addFunc(t *testing.T) {
 	annotations := map[string]string{pkg.PodEIPAnnotationKey: pkg.PodEIPAnnotationValue}
+	annotationsWithFixEIP := map[string]string{pkg.PodEIPAnnotationKey: pkg.PodEIPAnnotationValue, pkg.PodEIPModeAnnotationKey: pkg.PodEIPModeAnnotationVal}
+	annotationsWithReclaimEIP := map[string]string{pkg.PodEIPAnnotationKey: pkg.PodEIPAnnotationValue, pkg.PodEIPReclaimAnnotationKey: pkg.PodEIPReclaimAnnotationVal}
 
 	t.Run("given pod when it is added then it will be on the queue", func(t *testing.T) {
 		controller := newTestController(50, 500)
@@ -124,6 +127,45 @@ func TestPodController_addFunc(t *testing.T) {
 		assert.Equal(t, "default/test", getQueueItem(controller.queue))
 		assert.Equal(t, 0, controller.queue.Len())
 	})
+
+	t.Run("given pod that enabled fixed eip mode in annotations", func(t *testing.T) {
+		controller := newTestController(5, 500)
+		pod := getPod("10.0.0.1", annotationsWithFixEIP)
+		controller.addFunc(pod)
+
+		assert.Equal(t, 1, controller.queue.Len())
+		item1, _ := controller.queue.Get()
+
+		// adding same pod, but first one has not been marked as done
+		controller.addFunc(pod)
+		assert.Equal(t, 0, controller.queue.Len())
+
+		// finished work with first one
+		controller.queue.Forget(item1)
+		controller.queue.Done(item1)
+
+		assert.Equal(t, 1, controller.queue.Len())
+	})
+
+	t.Run("given pod that disables eip reclaim in annotations", func(t *testing.T) {
+		controller := newTestController(5, 500)
+		pod := getPod("10.0.0.1", annotationsWithReclaimEIP)
+		controller.addFunc(pod)
+
+		assert.Equal(t, 1, controller.queue.Len())
+		item1, _ := controller.queue.Get()
+
+		// adding same pod, but first one has not been marked as done
+		controller.addFunc(pod)
+		assert.Equal(t, 0, controller.queue.Len())
+
+		// finished work with first one
+		controller.queue.Forget(item1)
+		controller.queue.Done(item1)
+
+		assert.Equal(t, 1, controller.queue.Len())
+	})
+
 }
 
 func TestPodController_addUpdateEvent(t *testing.T) {
