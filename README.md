@@ -68,13 +68,13 @@ kind: ClusterConfig
 metadata:
   name: eip-controller-demo
   region: ${AWS_REGION}
-  version: "1.27"
+  version: "1.28"
 
 iam:
   withOIDC: true
 managedNodeGroups:
   - name: main
-    instanceType: m5.large
+    instanceType: m6i.large
     desiredCapacity: 2
     privateNetworking: false
 EOF
@@ -154,9 +154,11 @@ eksctl create iamserviceaccount \
 Deploy aws-pod-eip-controller helm chart
 
 ```shell
-helm install controller ./charts/aws-pod-eip-controller \
+helm install aws-pod-eip-controller ./charts/aws-pod-eip-controller \
   --namespace kube-system \
   --set image=${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/aws-pod-eip-controller:latest \
+  --set clusterName=eip-controller-demo \
+  --set serviceAccountName=aws-pod-eip-controller \
   --wait
 ```
 
@@ -203,11 +205,34 @@ spec:
       serviceAccountName: nginx-user
       containers:
       - image: nginx:1.20
-        imagePullPolicy: Always
         name: nginx
         ports:
         - containerPort: 80
           protocol: TCP
+        resources:
+          limits:
+            cpu: "0.5"
+            memory: "512Mi"
+          requests:
+            cpu: "0.1"
+            memory: "128Mi"
+        volumeMounts:
+        - name: podinfo
+          mountPath: /etc/podinfo
+      initContainers:
+      - image: busybox:1.28
+        name: innit
+        command: ['timeout', '-t' ,'60', 'sh','-c', "until grep -E '^aws-pod-eip-controller-public-ip?' /etc/podinfo/labels; do echo waiting for labels; sleep 2; done"]
+        volumeMounts:
+        - name: podinfo
+          mountPath: /etc/podinfo
+      volumes:
+        - name: podinfo
+          downwardAPI:
+            items:
+            - path: "labels"
+              fieldRef:
+                fieldPath: metadata.labels
 EOF
 kubectl apply -f nginx.demo.yaml
 ```
@@ -235,6 +260,8 @@ kubectl get pods <your-pod-name> \
 
 **Note**: In the security group where this EIP is located, adding an access rule for port 80 will allow you to access
 the Pod through the EIP.
+
+**Note**: Similarly, you can also mount the relevant labels to the file system through the downwardAPI for access. As shown in the example, they are mounted to the /etc/podinfo/labels path.
 
 ## Cleanup
 
