@@ -15,9 +15,10 @@ The solution processes EIPs for Pods through the following steps:
 
 ## Annotations
 
-| Name                                                 | Type   | Default  | Location |
-|------------------------------------------------------|--------|----------|----------|
-| aws-samples.github.com/aws-pod-eip-controller-type   | string | auto     | pod      |
+| Name                                                           | Type   | Default  | Location |
+|----------------------------------------------------------------|--------|----------|----------|
+| aws-samples.github.com/aws-pod-eip-controller-type             | string | auto     | pod      |
+| aws-samples.github.com/aws-pod-eip-controller-public-ipv4-pool | string |          | pod      |
 
 ## Config
 

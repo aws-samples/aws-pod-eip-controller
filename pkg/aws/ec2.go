@@ -39,7 +39,7 @@ func NewEC2Client(logger *slog.Logger, region, vpcID, clusterName string) (EC2Cl
 	}, nil
 }
 
-func (c EC2Client) AssociateAddress(podKey, podIP string) (string, error) {
+func (c EC2Client) AssociateAddress(podKey, podIP string, addressPoolId *string) (string, error) {
 	ni, err := c.getNetworkInterface(podIP)
 	if err != nil {
 		return "", err
@@ -52,7 +52,7 @@ func (c EC2Client) AssociateAddress(podKey, podIP string) (string, error) {
 		c.logger.Info(fmt.Sprintf("pod ip %s is already associated with %s ip", podIP, addrs[0].publicIP))
 		return addrs[0].publicIP, nil
 	}
-	return c.allocatedAndAssociateAddress(podKey, podIP, ni.id)
+	return c.allocatedAndAssociateAddress(podKey, podIP, ni.id, addressPoolId)
 }
 
 func (c EC2Client) HasAssociatedAddress(podIP string) (bool, error) {
@@ -199,12 +199,13 @@ func (c EC2Client) describePodAddresses(podKey string) ([]address, error) {
 	return out, nil
 }
 
-func (c EC2Client) allocatedAndAssociateAddress(podKey, privateIP, eniID string) (string, error) {
+func (c EC2Client) allocatedAndAssociateAddress(podKey, privateIP, eniID string, addressPoolId *string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	// aws ec2 allocate-address
 	allocatedResult, err := c.client.AllocateAddress(ctx, &ec2.AllocateAddressInput{
+		PublicIpv4Pool: addressPoolId,
 		TagSpecifications: []types.TagSpecification{
 			{
 				ResourceType: types.ResourceTypeElasticIp,

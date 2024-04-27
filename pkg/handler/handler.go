@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 
 	"github.com/aws-samples/aws-pod-eip-controller/pkg"
@@ -17,7 +18,7 @@ import (
 )
 
 type ENIClient interface {
-	AssociateAddress(podKey, podIP string) (string, error)
+	AssociateAddress(podKey, podIP string, addressPoolId *string) (string, error)
 	DisassociateAddress(podKey string) error
 	HasAssociatedAddress(podIP string) (bool, error)
 }
@@ -42,6 +43,15 @@ func (p PodEvent) HasEIPAnnotation() bool {
 func (p PodEvent) GetPublicIPLabel() (string, bool) {
 	v, ok := p.Labels[pkg.PodPublicIPLabel]
 	return v, ok
+}
+
+func (p PodEvent) GetAddressPoolId() *string {
+	v, ok := p.Labels[pkg.PodAddressPoolAnnotationKey]
+	if ok {
+		val := strings.Clone(v)
+		return &val
+	}
+	return nil
 }
 
 func NewPodEvent(key string, pod v1.Pod) PodEvent {
@@ -145,7 +155,7 @@ func (h *Handler) addOrUpdateEvent(event PodEvent) error {
 	}
 
 	// pod has EIP annotation
-	publicIP, err := h.eniClient.AssociateAddress(event.Key, event.IP)
+	publicIP, err := h.eniClient.AssociateAddress(event.Key, event.IP, event.GetAddressPoolId())
 	if err != nil {
 		return fmt.Errorf("associate address %s: %v", event.Key, err)
 	}
