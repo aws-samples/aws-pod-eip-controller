@@ -6,13 +6,15 @@ package aws
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"net"
+	"time"
+
 	"github.com/aws-samples/aws-pod-eip-controller/pkg"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
-	"log/slog"
-	"time"
 )
 
 type EC2Client struct {
@@ -39,8 +41,8 @@ func NewEC2Client(logger *slog.Logger, region, vpcID, clusterName string) (EC2Cl
 	}, nil
 }
 
-func (c EC2Client) AssociateAddress(podKey, podIP string, addressPoolId *string) (string, error) {
-	ni, err := c.getNetworkInterface(podIP)
+func (c EC2Client) AssociateAddress(podKey, podIP, hostIP string, addressPoolId *string) (string, error) {
+	ni, err := c.getNetworkInterface(podIP, hostIP)
 	if err != nil {
 		return "", err
 	}
@@ -55,8 +57,8 @@ func (c EC2Client) AssociateAddress(podKey, podIP string, addressPoolId *string)
 	return c.allocatedAndAssociateAddress(podKey, podIP, ni.id, addressPoolId)
 }
 
-func (c EC2Client) HasAssociatedAddress(podIP string) (bool, error) {
-	ni, err := c.getNetworkInterface(podIP)
+func (c EC2Client) HasAssociatedAddress(podIP, hostIP string) (bool, error) {
+	ni, err := c.getNetworkInterface(podIP, hostIP)
 	if err != nil {
 		return false, err
 	}
@@ -94,7 +96,7 @@ func toNetworkInterface(ni types.NetworkInterface) networkInterface {
 	}
 }
 
-func (c EC2Client) getNetworkInterface(privateIP string) (networkInterface, error) {
+func (c EC2Client) getNetworkInterface(privateIP string, hostIP string) (networkInterface, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -114,10 +116,60 @@ func (c EC2Client) getNetworkInterface(privateIP string) (networkInterface, erro
 	if err != nil {
 		return networkInterface{}, fmt.Errorf("describe-network-interfaces private-ip-address %s vpc-id %s", privateIP, c.vpcID)
 	}
-	if len(result.NetworkInterfaces) == 0 {
-		return networkInterface{}, fmt.Errorf("no id found for %s private IP in %s vpc", privateIP, c.vpcID)
+	if len(result.NetworkInterfaces) > 0 {
+		return toNetworkInterface(result.NetworkInterfaces[0]), nil
 	}
-	return toNetworkInterface(result.NetworkInterfaces[0]), nil
+
+	// ip prefix mode
+	// aws ec2 describe-network-interfaces --filters Name=vpc-id,Values=vpc-06918bf4ad51c9d09 Name=addresses.private-ip-address,Values=192.168.5.21 --region us-east-1
+	result, err = c.client.DescribeNetworkInterfaces(ctx, &ec2.DescribeNetworkInterfacesInput{
+		Filters: []types.Filter{
+			{
+				Name:   aws.String("vpc-id"),
+				Values: []string{c.vpcID},
+			},
+			{
+				Name:   aws.String("addresses.private-ip-address"),
+				Values: []string{hostIP},
+			},
+		},
+	})
+	if err != nil {
+		return networkInterface{}, fmt.Errorf("describe-network-interfaces host-ip %s vpc-id %s error", hostIP, c.vpcID)
+	}
+	if len(result.NetworkInterfaces) == 0 {
+		return networkInterface{}, fmt.Errorf("no network interface found for %s private IP host IP %s in %s vpc on ipv4prefixes", privateIP, hostIP, c.vpcID)
+	}
+	// aws ec2 describe-network-interfaces --filters Name=vpc-id,Values=vpc-06918bf4ad51c9d09 Name=attachment.instance-id,Values=i-0d828397cc4f56df5 --region us-east-1
+	result, err = c.client.DescribeNetworkInterfaces(ctx, &ec2.DescribeNetworkInterfacesInput{
+		Filters: []types.Filter{
+			{
+				Name:   aws.String("vpc-id"),
+				Values: []string{c.vpcID},
+			},
+			{
+				Name:   aws.String("attachment.instance-id"),
+				Values: []string{aws.ToString(result.NetworkInterfaces[0].Attachment.InstanceId)},
+			},
+		},
+	})
+	if err != nil {
+		return networkInterface{}, fmt.Errorf("describe-network-interfaces instance-id %s vpc-id %s error", aws.ToString(result.NetworkInterfaces[0].Attachment.InstanceId), c.vpcID)
+	}
+	if len(result.NetworkInterfaces) == 0 {
+		return networkInterface{}, fmt.Errorf("no network interface found for instance id %s in %s vpc on ipv4prefixes", aws.ToString(result.NetworkInterfaces[0].Attachment.InstanceId), c.vpcID)
+	}
+	ip := net.ParseIP(privateIP)
+	for _, ni := range result.NetworkInterfaces {
+		for _, prefix := range ni.Ipv4Prefixes {
+			c.logger.Debug(fmt.Sprintf("checking %s prefix %s", aws.ToString(ni.NetworkInterfaceId), aws.ToString(prefix.Ipv4Prefix)))
+			_, ipnet, _ := net.ParseCIDR(aws.ToString(prefix.Ipv4Prefix))
+			if ipnet.Contains(ip) {
+				return toNetworkInterface(ni), nil
+			}
+		}
+	}
+	return networkInterface{}, fmt.Errorf("no id found for %s private IP host IP %s in %s vpc on ipv4prefixes", privateIP, hostIP, c.vpcID)
 }
 
 func (c EC2Client) deleteTag(resource, key string) error {
