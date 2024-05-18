@@ -18,9 +18,9 @@ import (
 )
 
 type ENIClient interface {
-	AssociateAddress(podKey, podIP string, addressPoolId *string) (string, error)
+	AssociateAddress(podKey, podIP, hostIP string, addressPoolId *string) (string, error)
 	DisassociateAddress(podKey string) error
-	HasAssociatedAddress(podIP string) (bool, error)
+	HasAssociatedAddress(podIP, hostIP string) (bool, error)
 }
 
 type PodEvent struct {
@@ -30,6 +30,7 @@ type PodEvent struct {
 	Annotations     map[string]string
 	Labels          map[string]string
 	IP              string
+	HostIP          string
 	ResourceVersion string
 }
 
@@ -62,6 +63,7 @@ func NewPodEvent(key string, pod v1.Pod) PodEvent {
 		Annotations:     pod.Annotations,
 		Labels:          pod.Labels,
 		IP:              pod.Status.PodIP,
+		HostIP:          pod.Status.HostIP,
 		ResourceVersion: pod.ResourceVersion,
 	}
 }
@@ -132,9 +134,9 @@ func (h *Handler) sameStatusInCache(key string, event PodEvent) bool {
 }
 
 func (h *Handler) addOrUpdateEvent(event PodEvent) error {
-	isAssociated, err := h.eniClient.HasAssociatedAddress(event.IP)
+	isAssociated, err := h.eniClient.HasAssociatedAddress(event.IP, event.HostIP)
 	if err != nil {
-		return fmt.Errorf("check if pod %s ip %s is associated: %w", event.Key, event.IP, err)
+		return fmt.Errorf("check if pod %s ip %s host ip %s is associated: %w", event.Key, event.IP, event.HostIP, err)
 	}
 
 	// pod does not have EIP annotation
@@ -155,7 +157,7 @@ func (h *Handler) addOrUpdateEvent(event PodEvent) error {
 	}
 
 	// pod has EIP annotation
-	publicIP, err := h.eniClient.AssociateAddress(event.Key, event.IP, event.GetAddressPoolId())
+	publicIP, err := h.eniClient.AssociateAddress(event.Key, event.IP, event.HostIP, event.GetAddressPoolId())
 	if err != nil {
 		return fmt.Errorf("associate address %s: %v", event.Key, err)
 	}
