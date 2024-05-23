@@ -17,6 +17,12 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
 )
 
+var keyLocks *KeyLock
+
+func init() {
+	keyLocks = NewKeyLock()
+}
+
 type EC2Client struct {
 	logger      *slog.Logger
 	vpcID       string
@@ -41,47 +47,97 @@ func NewEC2Client(logger *slog.Logger, region, vpcID, clusterName string) (EC2Cl
 	}, nil
 }
 
-func (c EC2Client) AssociateAddress(podKey, podIP, hostIP string, addressPoolId *string) (string, error) {
-	ni, err := c.getNetworkInterface(podIP, hostIP)
+type AssociateAddressOptions struct {
+	PodKey        string
+	PodIP         string
+	HostIP        string
+	AddressPoolId string
+	PECType       string
+	TagKey        string
+	TagValueKey   string
+}
+
+func (c EC2Client) AssociateAddress(options AssociateAddressOptions) (string, error) {
+	ni, err := c.getNetworkInterface(options.PodIP, options.HostIP)
 	if err != nil {
 		return "", err
 	}
-	addrs, err := c.describeAddresses(podIP, ni.id)
-	if err != nil {
+	var allocationID, publicIP string
+	switch options.PECType {
+	case pkg.PodEIPAnnotationValueAuto:
+		allocationID, publicIP, err = c.allocateAddress(options.PodKey, options.AddressPoolId)
+		if err != nil {
+			return "", err
+		}
+	case pkg.PodEIPAnnotationValueFixedTag:
+		keyLocks.Lock(options.TagKey)
+		defer keyLocks.Unlock(options.TagKey)
+		allocationID, publicIP, err = c.getTagAddress(options.TagKey)
+		if err != nil {
+			return "", err
+		}
+		if err := c.createTag(allocationID, map[string]string{
+			pkg.TagPodKey:         options.PodKey,
+			pkg.TagClusterNameKey: c.clusterName,
+			pkg.TagTypeKey:        pkg.PodEIPAnnotationValueFixedTag,
+		}); err != nil {
+			return "", err
+		}
+	case pkg.PodEIPAnnotationValueFixedTagValue:
+		allocationID, publicIP, err = c.getTagValueAddress(options.TagValueKey, options.PodKey)
+		if err != nil {
+			return "", err
+		}
+		if err := c.createTag(allocationID, map[string]string{
+			pkg.TagPodKey:         options.PodKey,
+			pkg.TagClusterNameKey: c.clusterName,
+			pkg.TagTypeKey:        pkg.PodEIPAnnotationValueFixedTagValue,
+		}); err != nil {
+			return "", err
+		}
+	default:
+		return "", fmt.Errorf("unsupported PEC type %s", options.PECType)
+	}
+	if err := c.associateAddress(allocationID, ni.id, options.PodIP); err != nil {
 		return "", err
 	}
-	if len(addrs) != 0 {
-		c.logger.Info(fmt.Sprintf("pod ip %s is already associated with %s ip", podIP, addrs[0].publicIP))
-		return addrs[0].publicIP, nil
-	}
-	return c.allocatedAndAssociateAddress(podKey, podIP, ni.id, addressPoolId)
+	return publicIP, nil
 }
 
-func (c EC2Client) HasAssociatedAddress(podIP, hostIP string) (bool, error) {
-	ni, err := c.getNetworkInterface(podIP, hostIP)
-	if err != nil {
-		return false, err
-	}
-	addrs, err := c.describeAddresses(podIP, ni.id)
-	if err != nil {
-		return false, err
-	}
-	return len(addrs) != 0, nil
+type DisassociateAddressOptions struct {
+	PodKey string
 }
 
-func (c EC2Client) DisassociateAddress(podKey string) error {
-	addrs, err := c.describePodAddresses(podKey)
+func (c EC2Client) DisassociateAddress(options DisassociateAddressOptions) error {
+	addrs, err := c.describePodAddresses(options.PodKey)
 	if err != nil {
 		return err
 	}
 	if len(addrs) == 0 {
-		c.logger.Info(fmt.Sprintf("no address found for %s pod", podKey))
+		c.logger.Info(fmt.Sprintf("no address found for %s pod", options.PodKey))
 		return nil
 	}
-	if err := c.deleteTag(addrs[0].allocationID, pkg.TagPodKey); err != nil {
-		c.logger.Error(fmt.Sprintf("disassociate address %s: %v", podKey, err))
+	if err := c.disassociateAddress(addrs[0].associationID); err != nil {
+		c.logger.Error(fmt.Sprint())
+		return err
 	}
-	return c.disassociateAndReleaseAddress(addrs[0].associationID, addrs[0].allocationID)
+	tagType, ok := addrs[0].tags[pkg.TagTypeKey]
+	if !ok {
+		return nil
+	}
+	switch tagType {
+	case pkg.PodEIPAnnotationValueAuto: // auto mode release address
+		return c.releaseAddress(addrs[0].allocationID)
+	case pkg.PodEIPAnnotationValueFixedTag: // fixed-tag mode delete eip tag
+		if err := c.deleteTag(addrs[0].allocationID, []string{pkg.TagPodKey, pkg.TagTypeKey, pkg.TagClusterNameKey}); err != nil {
+			return err
+		}
+	case pkg.PodEIPAnnotationValueFixedTagValue: // fixed-tag-value mode delete eip tag
+		if err := c.deleteTag(addrs[0].allocationID, []string{pkg.TagPodKey, pkg.TagTypeKey, pkg.TagClusterNameKey}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 type networkInterface struct {
@@ -172,15 +228,34 @@ func (c EC2Client) getNetworkInterface(privateIP string, hostIP string) (network
 	return networkInterface{}, fmt.Errorf("no id found for %s private IP host IP %s in %s vpc on ipv4prefixes", privateIP, hostIP, c.vpcID)
 }
 
-func (c EC2Client) deleteTag(resource, key string) error {
+func (c EC2Client) createTag(resource string, kv map[string]string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	tags := make([]types.Tag, 0, len(kv))
+	for k, v := range kv {
+		tags = append(tags, types.Tag{Key: aws.String(k), Value: aws.String(v)})
+	}
+	if _, err := c.client.CreateTags(ctx, &ec2.CreateTagsInput{
+		Resources: []string{resource},
+		Tags:      tags,
+	}); err != nil {
+		return fmt.Errorf("create-tags resource %s tags %v", resource, kv)
+	}
+	return nil
+}
 
+func (c EC2Client) deleteTag(resource string, keys []string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	tags := make([]types.Tag, 0, len(keys))
+	for _, key := range keys {
+		tags = append(tags, types.Tag{Key: aws.String(key)})
+	}
 	if _, err := c.client.DeleteTags(ctx, &ec2.DeleteTagsInput{
 		Resources: []string{resource},
-		Tags:      []types.Tag{{Key: aws.String(key)}},
+		Tags:      tags,
 	}); err != nil {
-		return fmt.Errorf("delete-tags resource %s tag Key=%s", resource, key)
+		return fmt.Errorf("delete-tags resource %s tag Keys=%v", resource, keys)
 	}
 	return nil
 }
@@ -239,10 +314,19 @@ func (c EC2Client) describePodAddresses(podKey string) ([]address, error) {
 	defer cancel()
 
 	result, err := c.client.DescribeAddresses(ctx, &ec2.DescribeAddressesInput{
-		Filters: c.getAWSTagsFilter(podKey),
+		Filters: []types.Filter{
+			{
+				Name:   aws.String(fmt.Sprintf("tag:%s", pkg.TagPodKey)),
+				Values: []string{podKey},
+			},
+			{
+				Name:   aws.String(fmt.Sprintf("tag:%s", pkg.TagClusterNameKey)),
+				Values: []string{c.clusterName},
+			},
+		},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("describe address pod %s", podKey)
+		return nil, fmt.Errorf("describe address pod %s: %v", podKey, err)
 	}
 	var out []address
 	for _, v := range result.Addresses {
@@ -251,37 +335,90 @@ func (c EC2Client) describePodAddresses(podKey string) ([]address, error) {
 	return out, nil
 }
 
-func (c EC2Client) allocatedAndAssociateAddress(podKey, privateIP, eniID string, addressPoolId *string) (string, error) {
+func (c EC2Client) allocateAddress(podKey, addressPoolId string) (allocationID string, publicIP string, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	// aws ec2 allocate-address
 	allocatedResult, err := c.client.AllocateAddress(ctx, &ec2.AllocateAddressInput{
-		PublicIpv4Pool: addressPoolId,
+		PublicIpv4Pool: aws.String(addressPoolId),
 		TagSpecifications: []types.TagSpecification{
 			{
 				ResourceType: types.ResourceTypeElasticIp,
-				Tags:         c.getAWSTags(podKey),
+				Tags: []types.Tag{
+					{Key: aws.String(pkg.TagTypeKey), Value: aws.String(pkg.PodEIPAnnotationValueAuto)},
+					{Key: aws.String(pkg.TagClusterNameKey), Value: aws.String(c.clusterName)},
+					{Key: aws.String(pkg.TagPodKey), Value: aws.String(podKey)},
+				},
 			},
 		},
 	})
 	if err != nil {
-		return "", fmt.Errorf("allocate address: %w", err)
+		return "", "", fmt.Errorf("allocate address: %w", err)
 	}
+	return *allocatedResult.AllocationId, *allocatedResult.PublicIp, nil
+}
 
-	//aws ec2 associate-address --allocation-id eipalloc-64d5890a --network-interface-id eni-1a2b3c4d --private-ip-address 10.0.0.85
+func (c EC2Client) getTagAddress(tagKey string) (allocationID string, publicIP string, err error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// aws ec2 describe-addresses --filters Name=tag-key,Values=aws-pod-eip-controller --query 'Addresses[?AssociationId==null]'
+	describeResult, err := c.client.DescribeAddresses(ctx, &ec2.DescribeAddressesInput{
+		Filters: []types.Filter{
+			{Name: aws.String("tag-key"), Values: []string{tagKey}},
+		},
+	})
+	if err != nil {
+		return "", "", fmt.Errorf("get tag address fail: %w", err)
+	}
+	if len(describeResult.Addresses) == 0 {
+		return "", "", fmt.Errorf("no address found for tag key %s", tagKey)
+	}
+	for _, addr := range describeResult.Addresses {
+		if addr.AssociationId == nil {
+			return *addr.AllocationId, *addr.PublicIp, nil
+		}
+	}
+	return "", "", fmt.Errorf("no address found for tag key %s and not attached", tagKey)
+}
+
+func (c EC2Client) getTagValueAddress(tagKey, value string) (allocationID string, publicIP string, err error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// aws ec2 describe-addresses --filters Name=tag:%,Values=demo/demo-0
+	describeResult, err := c.client.DescribeAddresses(ctx, &ec2.DescribeAddressesInput{
+		Filters: []types.Filter{
+			{Name: aws.String(fmt.Sprintf("tag:%s", tagKey)), Values: []string{value}},
+		},
+	})
+	if err != nil {
+		return "", "", fmt.Errorf("get tag-value address fail: %w", err)
+	}
+	if len(describeResult.Addresses) == 0 {
+		return "", "", fmt.Errorf("no address found for tag-value key %s", tagKey)
+	}
+	return *describeResult.Addresses[0].AllocationId, *describeResult.Addresses[0].PublicIp, nil
+}
+
+func (c EC2Client) associateAddress(allocationId, eniID, privateIP string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	//aws ec2 associate-address --allocation-id eipalloc-64d5890a --network-interface-id eni-1a2b3c4d --private-ip-address
 	if _, err := c.client.AssociateAddress(ctx, &ec2.AssociateAddressInput{
-		AllocationId:       allocatedResult.AllocationId,
+		AllocationId:       aws.String(allocationId),
 		NetworkInterfaceId: aws.String(eniID),
 		PrivateIpAddress:   aws.String(privateIP),
 	}); err != nil {
-		return "", fmt.Errorf("associate address allocation-id %s network-interface-id %s private-ip-address %s",
-			aws.ToString(allocatedResult.AllocationId), eniID, privateIP)
+		return fmt.Errorf("associate address allocation-id %s network-interface-id %s private-ip-address %s",
+			allocationId, eniID, privateIP)
 	}
-	return aws.ToString(allocatedResult.PublicIp), nil
+	return nil
 }
 
-func (c EC2Client) disassociateAndReleaseAddress(associationID, allocationID string) error {
+func (c EC2Client) disassociateAddress(associationID string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -291,6 +428,12 @@ func (c EC2Client) disassociateAndReleaseAddress(associationID, allocationID str
 	}); err != nil {
 		return fmt.Errorf("disassociate address association-id %s", associationID)
 	}
+	return nil
+}
+
+func (c EC2Client) releaseAddress(allocationID string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
 	//aws ec2 release-address --allocation-id eipalloc-64d5890a
 	if _, err := c.client.ReleaseAddress(ctx, &ec2.ReleaseAddressInput{
@@ -299,28 +442,4 @@ func (c EC2Client) disassociateAndReleaseAddress(associationID, allocationID str
 		return fmt.Errorf("release address allocation-id %s", allocationID)
 	}
 	return nil
-}
-
-func (c EC2Client) getAWSTags(podKey string) []types.Tag {
-	var out []types.Tag
-	for k, v := range c.getTags(podKey) {
-		out = append(out, types.Tag{Key: aws.String(k), Value: aws.String(v)})
-	}
-	return out
-}
-
-func (c EC2Client) getAWSTagsFilter(podKey string) []types.Filter {
-	var out []types.Filter
-	for k, v := range c.getTags(podKey) {
-		out = append(out, types.Filter{Name: aws.String(fmt.Sprintf("tag:%s", k)), Values: []string{v}})
-	}
-	return out
-}
-
-func (c EC2Client) getTags(podKey string) map[string]string {
-	return map[string]string{
-		pkg.TagTypeKey:        "auto",
-		pkg.TagClusterNameKey: c.clusterName,
-		pkg.TagPodKey:         podKey,
-	}
 }

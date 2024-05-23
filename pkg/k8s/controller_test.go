@@ -4,16 +4,17 @@
 package k8s
 
 import (
+	"testing"
+
 	"github.com/aws-samples/aws-pod-eip-controller/pkg"
 	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/util/workqueue"
-	"testing"
 )
 
 func TestPodController_addFunc(t *testing.T) {
-	annotations := map[string]string{pkg.PodEIPAnnotationKey: pkg.PodEIPAnnotationValue}
+	annotations := map[string]string{pkg.PodEIPAnnotationKey: pkg.PodEIPAnnotationValueAuto}
 
 	t.Run("given pod when it is added then it will be on the queue", func(t *testing.T) {
 		controller := newTestController(50, 500)
@@ -127,7 +128,7 @@ func TestPodController_addFunc(t *testing.T) {
 }
 
 func TestPodController_addUpdateEvent(t *testing.T) {
-	annotations := map[string]string{pkg.PodEIPAnnotationKey: pkg.PodEIPAnnotationValue}
+	annotations := map[string]string{pkg.PodEIPAnnotationKey: pkg.PodEIPAnnotationValueAuto}
 
 	t.Run("given pod when it has ip and no eip annotation then it is added to the queue", func(t *testing.T) {
 		controller := newTestController(5, 500)
@@ -159,7 +160,7 @@ func TestPodController_addUpdateEvent(t *testing.T) {
 }
 
 func TestPodController_addDeleteEvent(t *testing.T) {
-	annotations := map[string]string{pkg.PodEIPAnnotationKey: pkg.PodEIPAnnotationValue}
+	annotations := map[string]string{pkg.PodEIPAnnotationKey: pkg.PodEIPAnnotationValueAuto}
 
 	t.Run("given pod when it has ip and no eip annotation then it is added to the queue", func(t *testing.T) {
 		controller := newTestController(5, 500)

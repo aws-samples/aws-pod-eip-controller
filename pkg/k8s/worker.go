@@ -5,11 +5,12 @@ package k8s
 
 import (
 	"fmt"
-	"k8s.io/api/core/v1"
-	"k8s.io/client-go/tools/cache"
-	"k8s.io/client-go/util/workqueue"
 	"log/slog"
 	"sync"
+
+	v1 "k8s.io/api/core/v1"
+	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/util/workqueue"
 )
 
 const maxQueueRetries = 3
@@ -37,6 +38,7 @@ func newWorker(logger *slog.Logger, handler PodHandler) *worker {
 func (w *worker) run(queue workqueue.RateLimitingInterface, indexer cache.KeyGetter) {
 	var wg sync.WaitGroup
 	for {
+		// request limit?
 		item, shutdown := queue.Get()
 		if shutdown {
 			w.logger.Info("received queue shut down")
@@ -81,9 +83,7 @@ func (w *worker) processItem(indexer cache.KeyGetter, key string) error {
 		w.logger.Debug(fmt.Sprintf("key %s not found in store, calling handler delete", key))
 		return w.handler.Delete(key)
 	}
-	if obj != nil {
-		pod = *obj.(*v1.Pod)
-	}
+	pod = *obj.(*v1.Pod)
 	w.logger.Debug(fmt.Sprintf("key %s found in store, calling handler add/update", key))
 	return w.handler.AddOrUpdate(key, pod)
 }

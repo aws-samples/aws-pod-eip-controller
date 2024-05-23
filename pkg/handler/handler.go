@@ -5,12 +5,12 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
-	"strings"
-	"sync"
 
 	"github.com/aws-samples/aws-pod-eip-controller/pkg"
+	"github.com/aws-samples/aws-pod-eip-controller/pkg/aws"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -18,69 +18,21 @@ import (
 )
 
 type ENIClient interface {
-	AssociateAddress(podKey, podIP, hostIP string, addressPoolId *string) (string, error)
-	DisassociateAddress(podKey string) error
-	HasAssociatedAddress(podIP, hostIP string) (bool, error)
-}
-
-type PodEvent struct {
-	Key             string
-	Name            string
-	Namespace       string
-	Annotations     map[string]string
-	Labels          map[string]string
-	IP              string
-	HostIP          string
-	ResourceVersion string
-}
-
-func (p PodEvent) HasEIPAnnotation() bool {
-	if v, ok := p.Annotations[pkg.PodEIPAnnotationKey]; ok {
-		return v == pkg.PodEIPAnnotationValue
-	}
-	return false
-}
-
-func (p PodEvent) GetPublicIPLabel() (string, bool) {
-	v, ok := p.Labels[pkg.PodPublicIPLabel]
-	return v, ok
-}
-
-func (p PodEvent) GetAddressPoolId() *string {
-	v, ok := p.Labels[pkg.PodAddressPoolAnnotationKey]
-	if ok {
-		val := strings.Clone(v)
-		return &val
-	}
-	return nil
-}
-
-func NewPodEvent(key string, pod v1.Pod) PodEvent {
-	return PodEvent{
-		Key:             key,
-		Name:            pod.Name,
-		Namespace:       pod.Namespace,
-		Annotations:     pod.Annotations,
-		Labels:          pod.Labels,
-		IP:              pod.Status.PodIP,
-		HostIP:          pod.Status.HostIP,
-		ResourceVersion: pod.ResourceVersion,
-	}
+	AssociateAddress(aws.AssociateAddressOptions) (string, error)
+	DisassociateAddress(aws.DisassociateAddressOptions) error
 }
 
 type Handler struct {
-	logger        *slog.Logger
-	coreClient    clientv1.CoreV1Interface
-	eniClient     ENIClient
-	cacheEventMap sync.Map
+	logger     *slog.Logger
+	coreClient clientv1.CoreV1Interface
+	eniClient  ENIClient
 }
 
 func NewHandler(logger *slog.Logger, coreClient clientv1.CoreV1Interface, eniClient ENIClient) *Handler {
 	h := &Handler{
-		logger:        logger.With("component", "handler"),
-		coreClient:    coreClient,
-		eniClient:     eniClient,
-		cacheEventMap: sync.Map{},
+		logger:     logger.With("component", "handler"),
+		coreClient: coreClient,
+		eniClient:  eniClient,
 	}
 	return h
 }
@@ -92,41 +44,55 @@ func (h *Handler) AddOrUpdate(key string, pod v1.Pod) error {
 	}
 
 	event := NewPodEvent(key, pod)
-	if h.sameStatusInCache(event.Key, event) {
-		h.logger.Debug(fmt.Sprintf("pod %s has same status in cache, skipping", event.Key))
+	if !h.hasChange(event) {
+		h.logger.Debug(fmt.Sprintf("pod %s has not change", event.Key))
 		return nil
 	}
 	h.logger.Info(fmt.Sprintf("received pod add/update %s phase %s IP %s", key, pod.Status.Phase, pod.Status.PodIP))
 	if err := h.addOrUpdateEvent(event); err != nil {
 		return err
 	}
-
-	h.cacheEventMap.Store(event.Key, event)
 	return nil
 }
 
 func (h *Handler) Delete(key string) error {
 	h.logger.Info(fmt.Sprintf("received pod delete %s", key))
-	if err := h.eniClient.DisassociateAddress(key); err != nil {
+	if err := h.DisassociateAddress(NewPodEvent(key, v1.Pod{})); err != nil {
 		return err
 	}
-	h.cacheEventMap.Delete(key)
 	return nil
 }
 
-// sameStatusInCache checks if the pod event is the same as the one in cache
-func (h *Handler) sameStatusInCache(key string, event PodEvent) bool {
-	if v, ok := h.cacheEventMap.Load(key); ok {
-		// resource version is the same, no need to process
-		if v.(PodEvent).ResourceVersion == event.ResourceVersion {
+// hasChange checks if the pod event is the same
+func (h *Handler) hasChange(event PodEvent) bool {
+	pecAnnotation, _ := event.GetPECTypeAnnotation()
+	pecLabel, _ := event.GetPECTypeLabel()
+	if pecAnnotation != pecLabel {
+		h.logger.Debug(fmt.Sprintf("pec type annotation %s and label %s are different", pecAnnotation, pecLabel))
+		return true
+	}
+	switch pecAnnotation {
+	// if the pod has auto annotation, check if the address pool id or fixed tag has changed
+	case pkg.PodEIPAnnotationValueAuto:
+		addressPoolIDAnnotation, _ := event.GetAddressPoolIdAnnotation()
+		addressPoolIDLabel, _ := event.GetAddressPoolIdLabel()
+		if addressPoolIDAnnotation != addressPoolIDLabel {
+			h.logger.Debug(fmt.Sprintf("address pool id annotation %s and label %s are different", addressPoolIDAnnotation, addressPoolIDLabel))
 			return true
 		}
-		// annotation is the same, no need to process
-		if v.(PodEvent).Annotations[pkg.PodEIPAnnotationKey] == event.Annotations[pkg.PodEIPAnnotationKey] {
+	// if the pod has fixed tag annotation, check if the fixed tag has changed
+	case pkg.PodEIPAnnotationValueFixedTag:
+		fixedTagAnnotation, _ := event.GetFixedTagAnnotation()
+		fixedTagLabel, _ := event.GetFixedTagLabel()
+		if fixedTagAnnotation != fixedTagLabel {
+			h.logger.Debug(fmt.Sprintf("fixed tag annotation %s and label %s are different", fixedTagAnnotation, fixedTagLabel))
 			return true
 		}
-		// annotation is not the same, but both are not set to auto, no need to process
-		if v.(PodEvent).Annotations[pkg.PodEIPAnnotationKey] != pkg.PodEIPAnnotationValue && event.Annotations[pkg.PodEIPAnnotationKey] != pkg.PodEIPAnnotationValue {
+	case pkg.PodEIPAnnotationValueFixedTagValue:
+		fixedTagValueAnnotation, _ := event.GetFixedTagValueAnnotation()
+		fixedTagValueLabel, _ := event.GetFixedTagValueLabel()
+		if fixedTagValueAnnotation != fixedTagValueLabel {
+			h.logger.Debug(fmt.Sprintf("fixed tag value annotation %s and label %s are different", fixedTagValueAnnotation, fixedTagValueLabel))
 			return true
 		}
 	}
@@ -134,57 +100,162 @@ func (h *Handler) sameStatusInCache(key string, event PodEvent) bool {
 }
 
 func (h *Handler) addOrUpdateEvent(event PodEvent) error {
-	isAssociated, err := h.eniClient.HasAssociatedAddress(event.IP, event.HostIP)
-	if err != nil {
-		return fmt.Errorf("check if pod %s ip %s host ip %s is associated: %w", event.Key, event.IP, event.HostIP, err)
-	}
-
-	// pod does not have EIP annotation
-	if !event.HasEIPAnnotation() {
-		if isAssociated {
-			if err := h.eniClient.DisassociateAddress(event.Key); err != nil {
-				return fmt.Errorf("pod %s does not have eip annotation, disassocate address: %w", event.Key, err)
-			}
-			h.logger.Info(fmt.Sprintf("pod %s does not have eip annotation, address has been disassociated", event.Key))
-		}
-		if _, ok := event.GetPublicIPLabel(); ok {
-			if err := h.patchPublicIPLabel(event, "remove", "None"); err != nil {
-				return fmt.Errorf("pod %s does not have eip annotation, remove label: %w", event.Key, err)
-			}
-			h.logger.Info(fmt.Sprintf("pod %s does not have address associated, label has been removed", event.Key))
-		}
-		return nil
-	}
-
-	// pod has EIP annotation
-	publicIP, err := h.eniClient.AssociateAddress(event.Key, event.IP, event.HostIP, event.GetAddressPoolId())
-	if err != nil {
-		return fmt.Errorf("associate address %s: %v", event.Key, err)
-	}
-
-	// pod has already public IP label, check if the public IP matches
-	if v, ok := event.GetPublicIPLabel(); ok {
-		if v == publicIP {
-			h.logger.Info(fmt.Sprintf("pod %s has already label %s=%s with correct IP", event.Key, pkg.PodPublicIPLabel, publicIP))
-			return nil
-		}
-		// public IP label does not match the pod public IP
-		h.logger.Warn(fmt.Sprintf("pod %s label %s=%s does not match its public ip is %s", event.Key, pkg.PodPublicIPLabel, v, publicIP))
-	}
-	if err := h.patchPublicIPLabel(event, "add", publicIP); err != nil {
+	// DisassociateAddress
+	if err := h.DisassociateAddress(event); err != nil {
+		h.logger.Error(fmt.Sprintf("disassociate address for pod: %s fail: %v", event.Key, err))
 		return err
 	}
-	h.logger.Info(fmt.Sprintf("pod %s patched with %s=%s label", event.Key, pkg.PodPublicIPLabel, publicIP))
+
+	// AssociateAddress
+	err := h.AssociateAddress(event)
+	if err != nil {
+		h.logger.Error(fmt.Sprintf("associate address for pod: %s fail: %v", event.Key, err))
+		return err
+	}
 	return nil
 }
 
-func (h *Handler) patchPublicIPLabel(event PodEvent, op, value string) error {
-	patch := []byte(fmt.Sprintf(`[{"op":"%s","path":"/metadata/labels/%s","value":"%s"}]`, op, pkg.PodPublicIPLabel, value))
-	if op == "remove" {
-		patch = []byte(fmt.Sprintf(`[{"op":"%s","path":"/metadata/labels/%s"}]`, op, pkg.PodPublicIPLabel))
+func (h *Handler) DisassociateAddress(event PodEvent) error {
+	if err := h.eniClient.DisassociateAddress(aws.DisassociateAddressOptions{
+		PodKey: event.Key,
+	}); err != nil {
+		return fmt.Errorf("disassociate address %s: %w", event.Key, err)
+	}
+	h.logger.Debug(fmt.Sprintf("disassociate address from pod %s", event.Key))
+	// remove all relate labels
+	labelPatches := make([]labelPatch, 0)
+	if _, exist := event.GetPECTypeLabel(); exist {
+		labelPatches = append(labelPatches, labelPatch{
+			Op:   "remove",
+			Path: fmt.Sprintf("/metadata/labels/%s", pkg.PodEIPAnnotationKeyLabel),
+		})
+	}
+	if _, exist := event.GetAddressPoolIdLabel(); exist {
+		labelPatches = append(labelPatches, labelPatch{
+			Op:   "remove",
+			Path: fmt.Sprintf("/metadata/labels/%s", pkg.PodAddressPoolIDLabel),
+		})
+	}
+	if _, exist := event.GetPublicIPLabel(); exist {
+		labelPatches = append(labelPatches, labelPatch{
+			Op:   "remove",
+			Path: fmt.Sprintf("/metadata/labels/%s", pkg.PodPublicIPLabel),
+		})
+	}
+	if _, exist := event.GetFixedTagLabel(); exist {
+		labelPatches = append(labelPatches, labelPatch{
+			Op:   "remove",
+			Path: fmt.Sprintf("/metadata/labels/%s", pkg.PodFixedTagLabel),
+		})
+	}
+	if _, exist := event.GetFixedTagValueLabel(); exist {
+		labelPatches = append(labelPatches, labelPatch{
+			Op:   "remove",
+			Path: fmt.Sprintf("/metadata/labels/%s", pkg.PodFixedTagValueLabel),
+		})
+	}
+	if len(labelPatches) == 0 {
+		return nil
+	}
+	if err := h.patchPodLabel(event, labelPatches); err != nil {
+		return fmt.Errorf("patch pod %s: %w", event.Key, err)
+	}
+	return nil
+}
+
+func (h *Handler) AssociateAddress(event PodEvent) error {
+	pecType, _ := event.GetPECTypeAnnotation()
+	if !pkg.ValidPECType(pecType) {
+		h.logger.Info(fmt.Sprintf("invalid pec type %s for pod %s", pecType, event.Key))
+		return nil
+	}
+
+	addressPoolID, _ := event.GetAddressPoolIdAnnotation()
+	addressPoolIDTmp := addressPoolID
+	if addressPoolIDTmp == "" {
+		addressPoolIDTmp = "amazon"
+	}
+	tagKey, _ := event.GetFixedTagAnnotation()
+	tagValueKey, _ := event.GetFixedTagValueAnnotation()
+	publicIP, err := h.eniClient.AssociateAddress(aws.AssociateAddressOptions{
+		PodKey:        event.Key,
+		PodIP:         event.IP,
+		HostIP:        event.HostIP,
+		AddressPoolId: addressPoolIDTmp,
+		PECType:       pecType,
+		TagKey:        tagKey,
+		TagValueKey:   tagValueKey,
+	})
+	if err != nil {
+		return fmt.Errorf("associate address %s: %w", event.Key, err)
+	}
+	h.logger.Debug(fmt.Sprintf("associate address %s to pod %s", publicIP, event.Key))
+
+	// add labels
+	labelPatches := make([]labelPatch, 0)
+	if pecType == pkg.PodEIPAnnotationValueAuto {
+		if addressPoolID > "" {
+			labelPatches = append(labelPatches, labelPatch{
+				Op:    "add",
+				Path:  fmt.Sprintf("/metadata/labels/%s", pkg.PodAddressPoolIDLabel),
+				Value: addressPoolID,
+			})
+		}
+	}
+	if pecType == pkg.PodEIPAnnotationValueFixedTag {
+		if tagKey > "" {
+			labelPatches = append(labelPatches, labelPatch{
+				Op:    "add",
+				Path:  fmt.Sprintf("/metadata/labels/%s", pkg.PodFixedTagLabel),
+				Value: tagKey,
+			})
+		}
+	}
+	if pecType == pkg.PodEIPAnnotationValueFixedTagValue {
+		if tagValueKey > "" {
+			labelPatches = append(labelPatches, labelPatch{
+				Op:    "add",
+				Path:  fmt.Sprintf("/metadata/labels/%s", pkg.PodFixedTagValueLabel),
+				Value: tagValueKey,
+			})
+		}
+	}
+	if pecType > "" {
+		labelPatches = append(labelPatches, labelPatch{
+			Op:    "add",
+			Path:  fmt.Sprintf("/metadata/labels/%s", pkg.PodEIPAnnotationKeyLabel),
+			Value: pecType,
+		})
+	}
+	if publicIP > "" {
+		labelPatches = append(labelPatches, labelPatch{
+			Op:    "add",
+			Path:  fmt.Sprintf("/metadata/labels/%s", pkg.PodPublicIPLabel),
+			Value: publicIP,
+		})
+	}
+	if len(labelPatches) == 0 {
+		return nil
+	}
+	if err := h.patchPodLabel(event, labelPatches); err != nil {
+		return fmt.Errorf("patch pod %s: %w", event.Key, err)
+	}
+	return nil
+}
+
+type labelPatch struct {
+	Op    string `json:"op"`
+	Path  string `json:"path"`
+	Value string `json:"value,omitempty"`
+}
+
+func (h *Handler) patchPodLabel(event PodEvent, lables []labelPatch) error {
+	patch, err := json.Marshal(lables)
+	if err != nil {
+		return fmt.Errorf("marshal patch: %w", err)
 	}
 	if _, err := h.coreClient.Pods(event.Namespace).Patch(context.Background(), event.Name, types.JSONPatchType, patch, metav1.PatchOptions{}); err != nil {
-		return fmt.Errorf("patch pod %s, %s label: %w", event.Key, op, err)
+		return fmt.Errorf("patch pod %s, %s error: %w", event.Key, patch, err)
 	}
 	return nil
 }
