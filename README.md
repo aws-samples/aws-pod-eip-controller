@@ -13,13 +13,6 @@ The solution processes EIPs for Pods through the following steps:
 3. The Worker gets the Pod key from the WorkQueue and acquires the related Pod information from the Indexer.
 4. Based on the Pod's annotation information, the Worker uses the AWS SDK to allocate and associate an EIP for the Pod or disassociate and release the EIP.
 
-## Annotations
-
-| Name                                                           | Type   | Default  | Location |
-|----------------------------------------------------------------|--------|----------|----------|
-| aws-samples.github.com/aws-pod-eip-controller-type             | string | auto     | pod      |
-| aws-samples.github.com/aws-pod-eip-controller-public-ipv4-pool | string |          | pod      |
-
 ## Config
 
 | Flag            | Chart Value          | Type    | Default | Describetion                                                   |
