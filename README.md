@@ -16,7 +16,7 @@ The solution processes EIPs for Pods through the following steps:
 ## Config
 
 | Flag            | Chart Value          | Type    | Default | Describetion                                                   |
-|-----------------|----------------------|---------|---------|----------------------------------------------------------------|
+| --------------- | -------------------- | ------- | ------- | -------------------------------------------------------------- |
 | N/A             | image                | string  | ''      | aws pod eip controller docker image to deploy                  |
 | kubeconfig      | N/A                  | string  | ''      | kubeconfig path, need to provide when debugging locally        |
 | vpc-id          | vpcID                | string  | ''      | need to provide when debugging locally or deploying in fargate |
@@ -27,6 +27,119 @@ The solution processes EIPs for Pods through the following steps:
 | N/A             | createServiceAccount | boolean | false   | whether the helm chart should create service account           |
 | resync-period   | resyncPeriod         | int     | 0       | the resync-period for informer                                 |
 | N/A             | serviceAccountName   | string  | ''      | The serviceaccount name used by Pod EIP controller             |
+
+## Annotations
+
+| Name                                                           | Type   | Default | Location |
+| -------------------------------------------------------------- | ------ | ------- | -------- |
+| aws-samples.github.com/aws-pod-eip-controller-type             | string |         | pod      |
+| aws-samples.github.com/aws-pod-eip-controller-public-ipv4-pool | string |         | pod      |
+| aws-samples.github.com/aws-pod-eip-controller-fixed-tag        | string |         | pod      |
+| aws-samples.github.com/aws-pod-eip-controller-fixed-tag-value  | string |         | pod      |
+
+### Automatically apply for EIP: auto
+
+In automatic mode, the Controller will automatically allocate and associate an EIP when a Pod with the **aws-samples.github.com/aws-pod-eip-controller-type: auto** annotation is added, and disassociate and release the EIP when the Pod is deleted.
+
+By default, the EIP is allocate through the **amazon** ipv4-pool. The ipv4-pool for requesting can be specified by annotation: **aws-samples.github.com/aws-pod-eip-controller-public-ipv4-pool**.
+
+#### Example
+
+Add support for binding EIP to Pods
+
+```yaml
+aws-samples.github.com/aws-pod-eip-controller-type: auto
+```
+
+Allocate EIP from ipv4-pool **amazon-staticbgp**
+
+```yaml
+aws-samples.github.com/aws-pod-eip-controller-type: auto
+aws-samples.github.com/aws-pod-eip-controller-public-ipv4-pool: amazon-staticbgp
+```
+
+### Allocate through EIP's Tag: fixed-tag
+
+In this mode, the Controller allocates EIPs by specifying the EIP's Tag. When deleting a Pod, it will not release the EIP. You need to pre-tag the requested EIPs accordingly.
+
+#### Example
+
+In an environment where an EIP containing the tag-key **pec-ip-pool** has been allocated for but not associated.
+
+```shell
+# command
+aws ec2 describe-addresses --filters Name=tag-key,Values=pec-ip-pool --query 'Addresses[?AssociationId==null]'
+# result
+[
+    {
+        "PublicIp": "123.123.123.123",
+        "AllocationId": "eipalloc-0bc8fa6ecc46abcde",
+        "Domain": "vpc",
+        "Tags": [
+            {
+                "Key": "pec-ip-pool",
+                "Value": ""
+            }
+        ],
+        "PublicIpv4Pool": "amazon",
+        "NetworkBorderGroup": "ap-southeast-1"
+    }
+]
+```
+
+Assign the Controller to use the EIP with the tag-key **pec-ip-pool** for Pod processing.
+
+```yaml
+aws-samples.github.com/aws-pod-eip-controller-type: fixed-tag
+aws-samples.github.com/aws-pod-eip-controller-fixed-tag: pec-ip-pool
+```
+
+### Allocate EIP through EIP's Tag and Value: fixed-tag-value
+
+In this mode, the Controller allocates EIPs by specifying the EIP's Tag and Podkey (composed of NameSpace and PodName). When deleting a Pod, the EIP will not be released. It is necessary to pre-set the corresponding TAG and PodKey for the requested EIP.
+
+This mode is more suitable for StatefulSet, and requires processing the EIP tag value through the Pod's Name.
+
+#### Example
+
+For the Pod **app-nginx-demo-0** in the NameSpace **nginx-demo-ns**, allocate for an EIP in advance and set the corresponding tag and value.
+
+```shell
+# command
+aws ec2 describe-addresses --filters Name=tag:pec-ip-pool,Values=nginx-demo-ns/app-nginx-demo-0
+# result
+{
+    "Addresses": [
+        {
+            "PublicIp": "123.123.123.123",
+            "AllocationId": "eipalloc-0bc8fa6ecc46abcde",
+            "Domain": "vpc",
+            "Tags": [
+                {
+                    "Key": "pec-ip-pool",
+                    "Value": "nginx-demo-ns/app-nginx-demo-0"
+                }
+            ],
+            "PublicIpv4Pool": "amazon",
+            "NetworkBorderGroup": "ap-southeast-1"
+        }
+    ]
+}
+```
+
+Specify the Controller to use the EIP with the tag-key **pec-ip-pool** for processing Pods.
+
+```yaml
+aws-samples.github.com/aws-pod-eip-controller-type: fixed-tag-value
+aws-samples.github.com/aws-pod-eip-controller-fixed-tag-value: pec-ip-pool
+```
+
+## Instructions for Use
+
+* If the Pod is deleted in the case where the Controller exits, the Controller will not be able to capture the deletion event, resulting in the inability to perform the correct Pod exit processing.
+* In the fixed-tag mode, to avoid the same EIP being contested by multiple Pods, the Controller currently uses a queuing mechanism for processing. In other words, when the fixed-tag is the same as aws-samples.github.com/aws-pod-eip-controller-fixed-tag, queuing will occur, which may result in some delay in large-scale usage.
+* The Controller's cleanup of Pod EIP depends on EIP's Tags, avoiding modification of Tags in EIP with the prefix aws-samples.github.com.
+* When using the fixed-tag and fixed-tag-value modes, if multiple EKS clusters match the same tag simultaneously, there will be a contention for the EIP.
 
 ## Prerequisites
 
