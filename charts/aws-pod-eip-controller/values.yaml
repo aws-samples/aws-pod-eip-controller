@@ -8,3 +8,4 @@ region: ""
 watchNamespace: ""
 createServiceAccount: false
 resyncPeriod: 0
+nodeSelector: {}
