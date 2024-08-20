@@ -10,11 +10,12 @@ import (
 	"net"
 	"time"
 
-	"github.com/aws-samples/aws-pod-eip-controller/pkg"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
+
+	"github.com/aws-samples/aws-pod-eip-controller/pkg"
 )
 
 var keyLocks *KeyLock
@@ -330,7 +331,9 @@ func (c EC2Client) describePodAddresses(podKey string) ([]address, error) {
 	}
 	var out []address
 	for _, v := range result.Addresses {
-		out = append(out, toAddress(v))
+		if v.AssociationId != nil {
+			out = append(out, toAddress(v))
+		}
 	}
 	return out, nil
 }
@@ -406,7 +409,7 @@ func (c EC2Client) associateAddress(allocationId, eniID, privateIP string) error
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	//aws ec2 associate-address --allocation-id eipalloc-64d5890a --network-interface-id eni-1a2b3c4d --private-ip-address
+	// aws ec2 associate-address --allocation-id eipalloc-64d5890a --network-interface-id eni-1a2b3c4d --private-ip-address
 	if _, err := c.client.AssociateAddress(ctx, &ec2.AssociateAddressInput{
 		AllocationId:       aws.String(allocationId),
 		NetworkInterfaceId: aws.String(eniID),
@@ -422,7 +425,7 @@ func (c EC2Client) disassociateAddress(associationID string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	//aws ec2 disassociate-address --association-id eipassoc-2bebb745
+	// aws ec2 disassociate-address --association-id eipassoc-2bebb745
 	if _, err := c.client.DisassociateAddress(ctx, &ec2.DisassociateAddressInput{
 		AssociationId: aws.String(associationID),
 	}); err != nil {
@@ -435,7 +438,7 @@ func (c EC2Client) releaseAddress(allocationID string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	//aws ec2 release-address --allocation-id eipalloc-64d5890a
+	// aws ec2 release-address --allocation-id eipalloc-64d5890a
 	if _, err := c.client.ReleaseAddress(ctx, &ec2.ReleaseAddressInput{
 		AllocationId: aws.String(allocationID),
 	}); err != nil {
