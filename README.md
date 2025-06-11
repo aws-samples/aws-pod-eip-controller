@@ -149,7 +149,7 @@ aws-samples.github.com/aws-pod-eip-controller-fixed-tag-value: pec-ip-pool
 * Install [kubectl](https://kubernetes.io/docs/tasks/tools/).
 * install [git](https://github.com/git-guides/install-git).
 * install [docker](https://docs.docker.com/engine/install/).
-* install [docker buildx](https://docs.docker.com/build/architecture/#install-buildx).
+* install [docker buildx](https://docs.docker.com/build/building/multi-platform/).
 
 ## Walkthrough
 
@@ -174,7 +174,7 @@ kind: ClusterConfig
 metadata:
   name: eip-controller-demo
   region: ${AWS_REGION}
-  version: "1.28"
+  version: "1.33"
 
 iam:
   withOIDC: true
