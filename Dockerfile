@@ -1,4 +1,4 @@
-FROM public.ecr.aws/docker/library/golang:1.23.1-bullseye AS builder
+FROM public.ecr.aws/docker/library/golang:1.24.4-bullseye AS builder
 
 WORKDIR /workspace
 COPY . .
