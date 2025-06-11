@@ -171,7 +171,7 @@ func (c EC2Client) getNetworkInterface(privateIP string, hostIP string) (network
 		},
 	})
 	if err != nil {
-		return networkInterface{}, fmt.Errorf("describe-network-interfaces private-ip-address %s vpc-id %s", privateIP, c.vpcID)
+		return networkInterface{}, fmt.Errorf("describe-network-interfaces private-ip-address %s vpc-id %s error: %w", privateIP, c.vpcID, err)
 	}
 	if len(result.NetworkInterfaces) > 0 {
 		return toNetworkInterface(result.NetworkInterfaces[0]), nil
@@ -192,11 +192,18 @@ func (c EC2Client) getNetworkInterface(privateIP string, hostIP string) (network
 		},
 	})
 	if err != nil {
-		return networkInterface{}, fmt.Errorf("describe-network-interfaces host-ip %s vpc-id %s error", hostIP, c.vpcID)
+		return networkInterface{}, fmt.Errorf("describe-network-interfaces host-ip %s vpc-id %s error: %w", hostIP, c.vpcID, err)
 	}
 	if len(result.NetworkInterfaces) == 0 {
 		return networkInterface{}, fmt.Errorf("no network interface found for %s private IP host IP %s in %s vpc on ipv4prefixes", privateIP, hostIP, c.vpcID)
 	}
+
+	attachment := result.NetworkInterfaces[0].Attachment
+	if attachment == nil || attachment.InstanceId == nil {
+		return networkInterface{}, fmt.Errorf("network interface for host IP %s in vpc %s does not have an attached instance", hostIP, c.vpcID)
+	}
+	instanceId := aws.ToString(attachment.InstanceId)
+
 	// aws ec2 describe-network-interfaces --filters Name=vpc-id,Values=vpc-06918bf4ad51c9d09 Name=attachment.instance-id,Values=i-0d828397cc4f56df5 --region us-east-1
 	result, err = c.client.DescribeNetworkInterfaces(ctx, &ec2.DescribeNetworkInterfacesInput{
 		Filters: []types.Filter{
@@ -206,22 +213,22 @@ func (c EC2Client) getNetworkInterface(privateIP string, hostIP string) (network
 			},
 			{
 				Name:   aws.String("attachment.instance-id"),
-				Values: []string{aws.ToString(result.NetworkInterfaces[0].Attachment.InstanceId)},
+				Values: []string{instanceId},
 			},
 		},
 	})
 	if err != nil {
-		return networkInterface{}, fmt.Errorf("describe-network-interfaces instance-id %s vpc-id %s error", aws.ToString(result.NetworkInterfaces[0].Attachment.InstanceId), c.vpcID)
+		return networkInterface{}, fmt.Errorf("describe-network-interfaces instance-id %s vpc-id %s error: %w", instanceId, c.vpcID, err)
 	}
 	if len(result.NetworkInterfaces) == 0 {
-		return networkInterface{}, fmt.Errorf("no network interface found for instance id %s in %s vpc on ipv4prefixes", aws.ToString(result.NetworkInterfaces[0].Attachment.InstanceId), c.vpcID)
+		return networkInterface{}, fmt.Errorf("no network interface found for instance id %s in %s vpc on ipv4prefixes", instanceId, c.vpcID)
 	}
 	ip := net.ParseIP(privateIP)
 	for _, ni := range result.NetworkInterfaces {
 		for _, prefix := range ni.Ipv4Prefixes {
 			c.logger.Debug(fmt.Sprintf("checking %s prefix %s", aws.ToString(ni.NetworkInterfaceId), aws.ToString(prefix.Ipv4Prefix)))
 			_, ipnet, _ := net.ParseCIDR(aws.ToString(prefix.Ipv4Prefix))
-			if ipnet.Contains(ip) {
+			if ipnet != nil && ipnet.Contains(ip) {
 				return toNetworkInterface(ni), nil
 			}
 		}
