@@ -24,6 +24,9 @@ spec:
         app.kubernetes.io/version: {{ .Chart.Version }}
     spec:
       serviceAccountName: {{ .Values.serviceAccountName | default .Release.Name }}
+      {{- if .Values.podSecurityContext }}
+      securityContext: {{ .Values.podSecurityContext | toJson }}
+      {{- end }}
       {{- if .Values.nodeSelector }}
       nodeSelector: {{ .Values.nodeSelector | toJson }}
       {{- end }}
@@ -37,6 +40,9 @@ spec:
       - name: {{ .Chart.Name }}
         image: {{ .Values.image }}
         imagePullPolicy: IfNotPresent
+        {{- if .Values.containerSecurityContext }}
+        securityContext: {{ .Values.containerSecurityContext | toJson }}
+        {{- end }}
         env:
           - name: PEC_LOG_LEVEL
             value: {{ .Values.logLevel }}
