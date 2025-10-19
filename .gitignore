@@ -1,4 +1,5 @@
 .DS_Store
 tmp.txt
 config.tmp.yaml
-/aws-pod-eip-controller
+aws-pod-eip-controller
+tmp/

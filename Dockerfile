@@ -1,4 +1,4 @@
-FROM public.ecr.aws/docker/library/golang:1.24.4-bullseye AS builder
+FROM public.ecr.aws/docker/library/golang:1.25.3 AS builder
 
 WORKDIR /workspace
 COPY . .
@@ -6,7 +6,7 @@ RUN GOPROXY=direct go mod download
 
 RUN CGO_ENABLED=0 go build
 
-FROM public.ecr.aws/docker/library/alpine:3.22.0
+FROM public.ecr.aws/docker/library/alpine:3.22.2
 
 ENV USER=eipcontroller
 ENV GROUPNAME=$USER

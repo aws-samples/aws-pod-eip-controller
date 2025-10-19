@@ -174,7 +174,7 @@ kind: ClusterConfig
 metadata:
   name: eip-controller-demo
   region: ${AWS_REGION}
-  version: "1.33"
+  version: "1.34"
 
 iam:
   withOIDC: true
