@@ -9,3 +9,14 @@ watchNamespace: ""
 createServiceAccount: false
 resyncPeriod: 0
 nodeSelector: {}
+tolerations: {}
+affinity: {}
+resources:
+  limits:
+    cpu: 150m
+    memory: 256Mi
+  requests:
+    cpu: 150m
+    memory: 256Mi
+podSecurityContext: {}
+containerSecurityContext: {}
