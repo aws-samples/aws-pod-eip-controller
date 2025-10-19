@@ -23,15 +23,26 @@ spec:
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/version: {{ .Chart.Version }}
     spec:
-      serviceAccountName: {{ .Values.serviceAccountName }}
+      serviceAccountName: {{ .Values.serviceAccountName | default .Release.Name }}
+      {{- if .Values.podSecurityContext }}
+      securityContext: {{ .Values.podSecurityContext | toJson }}
+      {{- end }}
       {{- if .Values.nodeSelector }}
-      nodeSelector:
-      {{ toYaml .Values.nodeSelector | indent 8 }}
+      nodeSelector: {{ .Values.nodeSelector | toJson }}
+      {{- end }}
+      {{- if .Values.tolerations }}
+      tolerations: {{ .Values.tolerations | toJson }}
+      {{- end }}
+      {{- if .Values.affinity }}
+      affinity: {{ .Values.affinity | toJson }}
       {{- end }}
       containers:
       - name: {{ .Chart.Name }}
         image: {{ .Values.image }}
         imagePullPolicy: IfNotPresent
+        {{- if .Values.containerSecurityContext }}
+        securityContext: {{ .Values.containerSecurityContext | toJson }}
+        {{- end }}
         env:
           - name: PEC_LOG_LEVEL
             value: {{ .Values.logLevel }}
@@ -45,10 +56,6 @@ spec:
             value: {{ .Values.watchNamespace }}
           - name: PEC_RESYNC_PERIOD
             value: {{ quote .Values.resyncPeriod }}
-        resources:
-          limits:
-            cpu: 150m
-            memory: 256Mi
-          requests:
-            cpu: 150m
-            memory: 256Mi
+        {{- if .Values.resources }}
+        resources: {{ .Values.resources | toJson }}
+        {{- end }}
