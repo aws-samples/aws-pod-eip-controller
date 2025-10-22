@@ -11,6 +11,7 @@ type PodEvent struct {
 	Key             string
 	Name            string
 	Namespace       string
+	UID             string
 	Annotations     map[string]string
 	Labels          map[string]string
 	IP              string
@@ -94,6 +95,7 @@ func NewPodEvent(key string, pod v1.Pod) PodEvent {
 		Key:             key,
 		Name:            pod.Name,
 		Namespace:       pod.Namespace,
+		UID:             string(pod.UID),
 		Annotations:     pod.Annotations,
 		Labels:          pod.Labels,
 		IP:              pod.Status.PodIP,

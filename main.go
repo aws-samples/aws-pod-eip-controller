@@ -15,9 +15,13 @@ import (
 	"github.com/aws-samples/aws-pod-eip-controller/pkg/aws"
 	"github.com/aws-samples/aws-pod-eip-controller/pkg/handler"
 	"github.com/aws-samples/aws-pod-eip-controller/pkg/k8s"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/tools/record"
+	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 )
 
 func main() {
@@ -59,7 +63,13 @@ func main() {
 }
 
 func run(logger *slog.Logger, clientset *kubernetes.Clientset, eniClient handler.ENIClient, config k8s.PodControllerConfig) error {
-	podHandler := handler.NewHandler(logger, clientset.CoreV1(), eniClient)
+	// Create event broadcaster and recorder
+	eventBroadcaster := record.NewBroadcaster()
+	eventBroadcaster.StartRecordingToSink(&typedcorev1.EventSinkImpl{Interface: clientset.CoreV1().Events("")})
+	eventRecorder := eventBroadcaster.NewRecorder(scheme.Scheme, v1.EventSource{Component: "aws-pod-eip-controller"})
+	defer eventBroadcaster.Shutdown()
+
+	podHandler := handler.NewHandler(logger, clientset.CoreV1(), eniClient, eventRecorder)
 	podController, err := k8s.NewPodController(logger, clientset, podHandler, config)
 	if err != nil {
 		return fmt.Errorf("new pod informer: %v", err)

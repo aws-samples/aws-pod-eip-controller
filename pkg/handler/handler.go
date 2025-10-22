@@ -15,6 +15,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	clientv1 "k8s.io/client-go/kubernetes/typed/core/v1"
+	"k8s.io/client-go/tools/record"
 )
 
 type ENIClient interface {
@@ -23,16 +24,18 @@ type ENIClient interface {
 }
 
 type Handler struct {
-	logger     *slog.Logger
-	coreClient clientv1.CoreV1Interface
-	eniClient  ENIClient
+	logger        *slog.Logger
+	coreClient    clientv1.CoreV1Interface
+	eniClient     ENIClient
+	eventRecorder record.EventRecorder
 }
 
-func NewHandler(logger *slog.Logger, coreClient clientv1.CoreV1Interface, eniClient ENIClient) *Handler {
+func NewHandler(logger *slog.Logger, coreClient clientv1.CoreV1Interface, eniClient ENIClient, eventRecorder record.EventRecorder) *Handler {
 	h := &Handler{
-		logger:     logger.With("component", "handler"),
-		coreClient: coreClient,
-		eniClient:  eniClient,
+		logger:        logger.With("component", "handler"),
+		coreClient:    coreClient,
+		eniClient:     eniClient,
+		eventRecorder: eventRecorder,
 	}
 	return h
 }
@@ -119,9 +122,11 @@ func (h *Handler) DisassociateAddress(event PodEvent) error {
 	if err := h.eniClient.DisassociateAddress(aws.DisassociateAddressOptions{
 		PodKey: event.Key,
 	}); err != nil {
+		h.recordEvent(event, v1.EventTypeWarning, "EIPDisassociationFailed", fmt.Sprintf("Failed to disassociate EIP: %v", err))
 		return fmt.Errorf("disassociate address %s: %w", event.Key, err)
 	}
 	h.logger.Debug(fmt.Sprintf("disassociate address from pod %s", event.Key))
+	h.recordEvent(event, v1.EventTypeNormal, "EIPDisassociated", "Successfully disassociated EIP from Pod")
 	// remove all relate labels
 	labelPatches := make([]labelPatch, 0)
 	if _, exist := event.GetPECTypeLabel(); exist {
@@ -187,9 +192,11 @@ func (h *Handler) AssociateAddress(event PodEvent) error {
 		TagValueKey:   tagValueKey,
 	})
 	if err != nil {
+		h.recordEvent(event, v1.EventTypeWarning, "EIPAssociationFailed", fmt.Sprintf("Failed to associate EIP (%s mode): %v", pecType, err))
 		return fmt.Errorf("associate address %s: %w", event.Key, err)
 	}
 	h.logger.Debug(fmt.Sprintf("associate address %s to pod %s", publicIP, event.Key))
+	h.recordEvent(event, v1.EventTypeNormal, "EIPAssociated", fmt.Sprintf("Successfully associated EIP %s (%s mode)", publicIP, pecType))
 
 	// add labels
 	labelPatches := make([]labelPatch, 0)
@@ -258,4 +265,18 @@ func (h *Handler) patchPodLabel(event PodEvent, lables []labelPatch) error {
 		return fmt.Errorf("patch pod %s, %s error: %w", event.Key, patch, err)
 	}
 	return nil
+}
+
+func (h *Handler) recordEvent(event PodEvent, eventType, reason, message string) {
+	if h.eventRecorder != nil {
+		pod := &v1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:            event.Name,
+				Namespace:       event.Namespace,
+				UID:             types.UID(event.UID),
+				ResourceVersion: event.ResourceVersion,
+			},
+		}
+		h.eventRecorder.Event(pod, eventType, reason, message)
+	}
 }
