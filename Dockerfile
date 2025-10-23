@@ -1,10 +1,14 @@
 FROM public.ecr.aws/docker/library/golang:1.25.3 AS builder
 
 WORKDIR /workspace
-COPY . .
-RUN GOPROXY=direct go mod download
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod \
+    GOPROXY=direct go mod download
 
-RUN CGO_ENABLED=0 go build
+COPY . .
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 go build
 
 FROM public.ecr.aws/docker/library/alpine:3.22.2
 
