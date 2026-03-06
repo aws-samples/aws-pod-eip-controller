@@ -4,24 +4,26 @@
 package main
 
 import (
+	"context"
 	"fmt"
-	"log/slog"
-	"os"
-	"os/signal"
-	"syscall"
-	"time"
-
 	"github.com/aws-samples/aws-pod-eip-controller/pkg"
 	"github.com/aws-samples/aws-pod-eip-controller/pkg/aws"
 	"github.com/aws-samples/aws-pod-eip-controller/pkg/handler"
 	"github.com/aws-samples/aws-pod-eip-controller/pkg/k8s"
+	"golang.org/x/sync/errgroup"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
+	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/tools/record"
-	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
+	"log/slog"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+	"time"
 )
 
 func main() {
@@ -53,29 +55,76 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := run(logger, clientset, ec2Client, k8s.PodControllerConfig{
-		Namespace:    flags.WatchNamespace,
-		ResyncPeriod: time.Duration(flags.ResyncPeriod) * time.Second,
-	}); err != nil {
+	//if err := run(logger, clientset, ec2Client, k8s.PodControllerConfig{
+	//	Namespace:    flags.WatchNamespace,
+	//	ResyncPeriod: time.Duration(flags.ResyncPeriod) * time.Second,
+	//}); err != nil {
+	//	logger.Error(fmt.Sprintf("controller run: %v", err))
+	//	os.Exit(1)
+	//}
+
+	// One stopCh for all controllers
+	stopCh := getStopCh(logger)
+	// watchNamespace supports: "ns1,ns2,ns3". If empty -> default.
+	namespaces := splitNamespaces(flags.WatchNamespace)
+
+	g, _ := errgroup.WithContext(context.Background())
+
+	for _, ns := range namespaces {
+		ns := ns // capture loop var
+		g.Go(func() error {
+			nsLogger := logger.With("namespace", ns)
+			return runWithStopCh(nsLogger, clientset, ec2Client, k8s.PodControllerConfig{
+				Namespace:    ns,
+				ResyncPeriod: time.Duration(flags.ResyncPeriod) * time.Second,
+			}, stopCh)
+		})
+	}
+
+	if err := g.Wait(); err != nil {
 		logger.Error(fmt.Sprintf("controller run: %v", err))
 		os.Exit(1)
 	}
+
 }
 
-func run(logger *slog.Logger, clientset *kubernetes.Clientset, eniClient handler.ENIClient, config k8s.PodControllerConfig) error {
+//	func run(logger *slog.Logger, clientset *kubernetes.Clientset, eniClient handler.ENIClient, config k8s.PodControllerConfig) error {
+//		// Create event broadcaster and recorder
+//		eventBroadcaster := record.NewBroadcaster()
+//		eventBroadcaster.StartRecordingToSink(&typedcorev1.EventSinkImpl{Interface: clientset.CoreV1().Events("")})
+//		eventRecorder := eventBroadcaster.NewRecorder(scheme.Scheme, v1.EventSource{Component: "aws-pod-eip-controller"})
+//		defer eventBroadcaster.Shutdown()
+//
+//		podHandler := handler.NewHandler(logger, clientset.CoreV1(), eniClient, eventRecorder)
+//		podController, err := k8s.NewPodController(logger, clientset, podHandler, config)
+//		if err != nil {
+//			return fmt.Errorf("new pod informer: %v", err)
+//		}
+//
+//		podController.Run(getStopCh(logger))
+//		logger.Info("controller stopped")
+//		return nil
+//	}
+func runWithStopCh(logger *slog.Logger, clientset *kubernetes.Clientset, eniClient handler.ENIClient, config k8s.PodControllerConfig, stopCh <-chan struct{}) error {
 	// Create event broadcaster and recorder
 	eventBroadcaster := record.NewBroadcaster()
-	eventBroadcaster.StartRecordingToSink(&typedcorev1.EventSinkImpl{Interface: clientset.CoreV1().Events("")})
-	eventRecorder := eventBroadcaster.NewRecorder(scheme.Scheme, v1.EventSource{Component: "aws-pod-eip-controller"})
+	eventBroadcaster.StartRecordingToSink(&typedcorev1.EventSinkImpl{
+		Interface: clientset.CoreV1().Events(""),
+	})
+	eventRecorder := eventBroadcaster.NewRecorder(
+		scheme.Scheme,
+		v1.EventSource{Component: "aws-pod-eip-controller"},
+	)
 	defer eventBroadcaster.Shutdown()
 
 	podHandler := handler.NewHandler(logger, clientset.CoreV1(), eniClient, eventRecorder)
+
 	podController, err := k8s.NewPodController(logger, clientset, podHandler, config)
 	if err != nil {
 		return fmt.Errorf("new pod informer: %v", err)
 	}
 
-	podController.Run(getStopCh(logger))
+	podController.Run(stopCh)
 	logger.Info("controller stopped")
 	return nil
 }
@@ -130,4 +179,26 @@ func getRestConfig(logger *slog.Logger, kubeconfig string) (*rest.Config, error)
 	}
 	logger.Info("kubeconfig is set, creating default config")
 	return clientcmd.BuildConfigFromFlags("", kubeconfig)
+}
+
+func splitNamespaces(s string) []string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return []string{"default"}
+	}
+
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		out = append(out, p)
+	}
+
+	if len(out) == 0 {
+		return []string{"default"}
+	}
+	return out
 }
