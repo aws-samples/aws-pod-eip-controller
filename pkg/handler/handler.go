@@ -257,6 +257,15 @@ type labelPatch struct {
 }
 
 func (h *Handler) patchPodLabel(event PodEvent, lables []labelPatch) error {
+	// A pod can be replaced under the same name while an AWS request is in
+	// flight. Never record its predecessor's result on the replacement.
+	if event.UID != "" {
+		lables = append([]labelPatch{{
+			Op:    "test",
+			Path:  "/metadata/uid",
+			Value: event.UID,
+		}}, lables...)
+	}
 	patch, err := json.Marshal(lables)
 	if err != nil {
 		return fmt.Errorf("marshal patch: %w", err)
