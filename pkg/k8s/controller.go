@@ -57,10 +57,10 @@ func newPodInformer(clientset *kubernetes.Clientset, namespace string, resyncPer
 	return cache.NewSharedIndexInformer(
 		&cache.ListWatch{
 			ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
-				return clientset.CoreV1().Pods(namespace).List(context.Background(), metav1.ListOptions{})
+				return clientset.CoreV1().Pods(namespace).List(context.Background(), options)
 			},
 			WatchFunc: func(options metav1.ListOptions) (watch.Interface, error) {
-				return clientset.CoreV1().Pods(namespace).Watch(context.Background(), metav1.ListOptions{})
+				return clientset.CoreV1().Pods(namespace).Watch(context.Background(), options)
 			},
 		},
 		&v1.Pod{},
