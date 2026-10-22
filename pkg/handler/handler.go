@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/aws-samples/aws-pod-eip-controller/pkg"
 	"github.com/aws-samples/aws-pod-eip-controller/pkg/aws"
@@ -253,7 +254,7 @@ func (h *Handler) AssociateAddress(event PodEvent) error {
 type labelPatch struct {
 	Op    string `json:"op"`
 	Path  string `json:"path"`
-	Value string `json:"value,omitempty"`
+	Value any    `json:"value,omitempty"`
 }
 
 func (h *Handler) patchPodLabel(event PodEvent, lables []labelPatch) error {
@@ -270,10 +271,54 @@ func (h *Handler) patchPodLabel(event PodEvent, lables []labelPatch) error {
 	if err != nil {
 		return fmt.Errorf("marshal patch: %w", err)
 	}
-	if _, err := h.coreClient.Pods(event.Namespace).Patch(context.Background(), event.Name, types.JSONPatchType, patch, metav1.PatchOptions{}); err != nil {
-		return fmt.Errorf("patch pod %s, %s error: %w", event.Key, patch, err)
+	pods := h.coreClient.Pods(event.Namespace)
+	_, patchErr := pods.Patch(context.Background(), event.Name, types.JSONPatchType, patch, metav1.PatchOptions{})
+	if patchErr == nil {
+		return nil
 	}
-	return nil
+	// A JSON patch "add /metadata/labels/<key>" fails when the pod has no labels
+	// at all, because the parent object does not exist. Ask the API server (the
+	// event snapshot may be stale, e.g. disassociate just removed the last
+	// label) and retry once with the labels object created first.
+	if hasLabelAdd(lables) {
+		if retry, ok := h.withLabelsParent(event, lables); ok {
+			patch, err := json.Marshal(retry)
+			if err != nil {
+				return fmt.Errorf("marshal patch: %w", err)
+			}
+			if _, err := pods.Patch(context.Background(), event.Name, types.JSONPatchType, patch, metav1.PatchOptions{}); err != nil {
+				return fmt.Errorf("patch pod %s, %s error: %w", event.Key, patch, err)
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("patch pod %s, %s error: %w", event.Key, patch, patchErr)
+}
+
+func hasLabelAdd(patches []labelPatch) bool {
+	for _, p := range patches {
+		if p.Op == "add" && strings.HasPrefix(p.Path, "/metadata/labels/") {
+			return true
+		}
+	}
+	return false
+}
+
+// withLabelsParent returns the patches prefixed with the creation of an empty
+// labels object, but only when the live pod really has no labels. The
+// resourceVersion test makes the patch fail (and the work queue retry) instead
+// of overwriting labels that someone else added in the meantime.
+func (h *Handler) withLabelsParent(event PodEvent, patches []labelPatch) ([]labelPatch, bool) {
+	pod, err := h.coreClient.Pods(event.Namespace).Get(context.Background(), event.Name, metav1.GetOptions{})
+	if err != nil || len(pod.Labels) > 0 {
+		return nil, false
+	}
+	var out []labelPatch
+	if pod.ResourceVersion != "" {
+		out = append(out, labelPatch{Op: "test", Path: "/metadata/resourceVersion", Value: pod.ResourceVersion})
+	}
+	out = append(out, labelPatch{Op: "add", Path: "/metadata/labels", Value: map[string]string{}})
+	return append(out, patches...), true
 }
 
 func (h *Handler) recordEvent(event PodEvent, eventType, reason, message string) {
