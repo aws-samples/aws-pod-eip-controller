@@ -100,6 +100,13 @@ func (c EC2Client) AssociateAddress(options AssociateAddressOptions) (string, er
 		return "", fmt.Errorf("unsupported PEC type %s", options.PECType)
 	}
 	if err := c.associateAddress(allocationID, ni.id, options.PodIP); err != nil {
+		// Auto allocations belong to this operation. Roll them back on failure;
+		// tagged orphan discovery below permits retry if rollback also fails.
+		if options.PECType == pkg.PodEIPAnnotationValueAuto {
+			if cleanupErr := c.releaseAddress(allocationID); cleanupErr != nil {
+				return "", fmt.Errorf("%w; release allocated address: %v", err, cleanupErr)
+			}
+		}
 		return "", err
 	}
 	return publicIP, nil
@@ -114,28 +121,21 @@ func (c EC2Client) DisassociateAddress(options DisassociateAddressOptions) error
 	if err != nil {
 		return err
 	}
-	if len(addrs) == 0 {
-		c.logger.Info(fmt.Sprintf("no address found for %s pod", options.PodKey))
-		return nil
-	}
-	if err := c.disassociateAddress(addrs[0].associationID); err != nil {
-		c.logger.Error(fmt.Sprint())
-		return err
-	}
-	tagType, ok := addrs[0].tags[pkg.TagTypeKey]
-	if !ok {
-		return nil
-	}
-	switch tagType {
-	case pkg.PodEIPAnnotationValueAuto: // auto mode release address
-		return c.releaseAddress(addrs[0].allocationID)
-	case pkg.PodEIPAnnotationValueFixedTag: // fixed-tag mode delete eip tag
-		if err := c.deleteTag(addrs[0].allocationID, []string{pkg.TagPodKey, pkg.TagTypeKey, pkg.TagClusterNameKey}); err != nil {
-			return err
+	for _, addr := range addrs {
+		if addr.associationID != "" {
+			if err := c.disassociateAddress(addr.associationID); err != nil {
+				return err
+			}
 		}
-	case pkg.PodEIPAnnotationValueFixedTagValue: // fixed-tag-value mode delete eip tag
-		if err := c.deleteTag(addrs[0].allocationID, []string{pkg.TagPodKey, pkg.TagTypeKey, pkg.TagClusterNameKey}); err != nil {
-			return err
+		switch addr.tags[pkg.TagTypeKey] {
+		case pkg.PodEIPAnnotationValueAuto:
+			if err := c.releaseAddress(addr.allocationID); err != nil {
+				return err
+			}
+		case pkg.PodEIPAnnotationValueFixedTag, pkg.PodEIPAnnotationValueFixedTagValue:
+			if err := c.deleteTag(addr.allocationID, []string{pkg.TagPodKey, pkg.TagTypeKey, pkg.TagClusterNameKey}); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -338,9 +338,8 @@ func (c EC2Client) describePodAddresses(podKey string) ([]address, error) {
 	}
 	var out []address
 	for _, v := range result.Addresses {
-		if v.AssociationId != nil {
-			out = append(out, toAddress(v))
-		}
+		// Unassociated allocations still require release/tag cleanup.
+		out = append(out, toAddress(v))
 	}
 	return out, nil
 }
